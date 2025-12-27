@@ -134,15 +134,32 @@ class DailyBrowserStreamer:
         try:
             while not self.app_quit:
                 try:
-                    # Get current page (async operation)
-                    page = loop.run_until_complete(self.browser.get_current_page())
+                    # Get current page (async operation with timeout)
+                    logger.debug(f"Getting current page for frame {frame_count + 1}...")
+                    try:
+                        page = loop.run_until_complete(
+                            asyncio.wait_for(self.browser.get_current_page(), timeout=2.0)
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Timeout getting current page, skipping frame")
+                        time.sleep(sleep_time)
+                        continue
+                    
                     if not page:
                         logger.warning("No active page, skipping frame")
                         time.sleep(sleep_time)
                         continue
                     
-                    # Capture screenshot (async operation)
-                    screenshot_data = loop.run_until_complete(page.screenshot())
+                    logger.debug(f"Capturing screenshot for frame {frame_count + 1}...")
+                    # Capture screenshot (async operation with timeout)
+                    try:
+                        screenshot_data = loop.run_until_complete(
+                            asyncio.wait_for(page.screenshot(), timeout=2.0)
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Timeout capturing screenshot, skipping frame")
+                        time.sleep(sleep_time)
+                        continue
                     
                     if not screenshot_data:
                         logger.warning("Empty screenshot data, skipping frame")
@@ -152,8 +169,10 @@ class DailyBrowserStreamer:
                     # Handle both base64 string and bytes
                     if isinstance(screenshot_data, str):
                         screenshot_bytes = base64.b64decode(screenshot_data)
+                        logger.debug(f"Screenshot decoded from base64: {len(screenshot_bytes)} bytes")
                     else:
                         screenshot_bytes = screenshot_data
+                        logger.debug(f"Screenshot is bytes: {len(screenshot_bytes)} bytes")
                     
                     if not screenshot_bytes or len(screenshot_bytes) == 0:
                         logger.warning("Empty screenshot bytes, skipping frame")
@@ -162,28 +181,39 @@ class DailyBrowserStreamer:
                     
                     # Convert to PIL Image
                     image = Image.open(io.BytesIO(screenshot_bytes))
+                    logger.debug(f"Image opened: {image.size}, mode: {image.mode}")
                     
                     # Resize if needed to match camera dimensions
                     if image.size != (self.width, self.height):
                         image = image.resize((self.width, self.height), Image.Resampling.LANCZOS)
+                        logger.debug(f"Image resized to {self.width}x{self.height}")
                     
                     # Convert to RGB if needed
                     if image.mode != "RGB":
                         image = image.convert("RGB")
+                        logger.debug("Image converted to RGB")
                     
                     # Convert to bytes (EXACTLY like guide.py line 71)
                     image_bytes = image.tobytes()
+                    expected_size = self.width * self.height * 3
+                    logger.debug(f"Image bytes: {len(image_bytes)} bytes (expected: {expected_size})")
+                    
+                    if len(image_bytes) != expected_size:
+                        logger.warning(f"Image bytes size mismatch: got {len(image_bytes)}, expected {expected_size}")
                     
                     # Write frame to camera (EXACTLY like guide.py line 74)
-                    # Simple, synchronous call - no try/except needed, let errors propagate
+                    logger.debug(f"Writing frame {frame_count + 1} to camera...")
                     self.camera.write_frame(image_bytes)
                     frame_count += 1
                     
-                    if frame_count % (self.framerate * 2) == 0:  # Log every 2 seconds
+                    # Log first frame immediately, then every 10 frames (1 second at 10 FPS)
+                    if frame_count == 1:
+                        logger.info(f"✅ Sent first frame! ({len(image_bytes)} bytes)")
+                    elif frame_count % 10 == 0:
                         logger.info(f"✅ Sent {frame_count} frames")
                     
                 except Exception as e:
-                    logger.error(f"Error capturing/sending frame: {e}")
+                    logger.error(f"Error capturing/sending frame {frame_count + 1}: {e}", exc_info=True)
                     # Continue loop even on error
                 
                 # Sleep between frames (EXACTLY like guide.py line 75)
