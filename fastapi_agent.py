@@ -103,13 +103,62 @@ def check_chrome_available():
 # Check Chrome availability on startup
 _chrome_available = check_chrome_available()
 
-# Chrome args for Docker/Cloud Run/Vast AI environments
-# These are essential for running Chrome in server environments
+# UPDATED: Browser initialization with better error handling and longer timeout
+async def create_browser_with_retry(max_retries=3, timeout=120):
+    """Create browser with retry logic and better error handling."""
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"🚀 Browser startup attempt {attempt + 1}/{max_retries}")
+            
+            browser = Browser(
+                headless=HEADLESS_MODE,
+                window_size={'width': 1280, 'height': 720},
+                keep_alive=True,
+                args=CHROME_ARGS,
+            )
+            
+            # Try to start with longer timeout
+            await asyncio.wait_for(browser.start(), timeout=timeout)
+            
+            # Verify browser is actually working
+            try:
+                page = await browser.get_current_page()
+                if page:
+                    logger.info(f"✅ Browser started successfully on attempt {attempt + 1}")
+                    return browser
+            except Exception as verify_error:
+                logger.warning(f"Browser started but verification failed: {verify_error}")
+                # Continue to retry
+            
+        except asyncio.TimeoutError:
+            last_error = f"Browser startup timed out after {timeout}s"
+            logger.warning(f"⚠️ Attempt {attempt + 1} failed: {last_error}")
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"⚠️ Attempt {attempt + 1} failed: {last_error}")
+        
+        if attempt < max_retries - 1:
+            wait_time = (attempt + 1) * 2  # Exponential backoff
+            logger.info(f"⏳ Waiting {wait_time}s before retry...")
+            await asyncio.sleep(wait_time)
+        else:
+            # Cleanup failed browser instance if it exists
+            try:
+                if 'browser' in locals():
+                    await browser.close()
+            except:
+                pass
+    
+    raise Exception(f"Failed to start browser after {max_retries} attempts. Last error: {last_error}")
+
+# Add these Chrome args to suppress D-Bus errors and improve startup reliability
 CHROME_ARGS = [
-    '--no-sandbox',  # Required for Docker/Vast AI
+    '--no-sandbox',
     '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',  # Overcome limited resource problems
-    '--disable-gpu',  # Disable GPU acceleration (required for headless)
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
     '--disable-software-rasterizer',
     '--disable-extensions',
     '--disable-background-networking',
@@ -119,15 +168,19 @@ CHROME_ARGS = [
     '--no-first-run',
     '--safebrowsing-disable-auto-update',
     '--disable-blink-features=AutomationControlled',
-    '--disable-features=VizDisplayCompositor',  # Helps with headless rendering
-    '--disable-web-security',  # Sometimes needed for CDP
-    '--remote-debugging-port=0',  # Let browser_use choose the port
-    '--remote-allow-origins=*',  # Allow CDP connections
+    '--disable-features=VizDisplayCompositor',
+    '--disable-web-security',
+    '--remote-debugging-port=0',
+    '--remote-allow-origins=*',
+    # NEW: These suppress D-Bus errors in Docker/Vast.ai
+    '--disable-dbus',  # Disable D-Bus completely
+    '--no-zygote',  # Disable zygote process (helps in containers)
+    '--single-process',  # Run in single process mode (more stable in containers)
 ] if HEADLESS_MODE else [
-    # Even in non-headless mode, we need some flags for server environments
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
+    '--disable-dbus',
 ]
 
 
@@ -245,15 +298,9 @@ async def execute_action(request: ActionRequest):
                 # Browser is good, no need to navigate - work on current page
             except Exception as e:
                 logger.warning(f"⚠️ Browser session lost ({e}), will recreate...")
-                # Browser died, create new one
+                # Browser died, create new one with retry logic
                 try:
-                    browser = Browser(
-                        headless=HEADLESS_MODE,
-                        window_size={'width': 1280, 'height': 720},
-                        keep_alive=True,
-                        args=CHROME_ARGS,
-                    )
-                    await asyncio.wait_for(browser.start(), timeout=300.0)
+                    browser = await create_browser_with_retry(max_retries=3, timeout=120)
                     session_data["browser"] = browser
                     is_new_session = True  # Need to navigate since browser was recreated
                 except Exception as recreate_error:
@@ -283,35 +330,18 @@ async def execute_action(request: ActionRequest):
                     detail="Chrome/Chromium is not installed or not in PATH. Please run setup_chrome.sh to install it."
                 )
             
-            # Initialize browser
+            # Initialize browser with retry logic
             logger.info(f"🚀 Starting browser for session {session_id[:8]}...")
             logger.info(f"🔍 Headless mode: {HEADLESS_MODE}, Chrome args: {len(CHROME_ARGS)} flags")
             
-            browser = Browser(
-                headless=HEADLESS_MODE,  # Auto-detects from environment
-                window_size={'width': 1280, 'height': 720},
-                keep_alive=True,  # Keep browser alive between requests
-                args=CHROME_ARGS,  # Add Docker/Cloud Run specific flags
-            )
-            
-            logger.info(f"🔍 Browser instance ID: {id(browser)}")
-            
-            # Start browser session ONCE - this creates the browser window
-            # Add timeout and better error handling
             try:
-                await asyncio.wait_for(browser.start(), timeout=300.0)  # 60 second timeout
+                browser = await create_browser_with_retry(max_retries=3, timeout=120)
                 logger.info(f"✅ Browser started for session {session_id[:8]}")
-            except asyncio.TimeoutError:
-                logger.error(f"❌ Browser startup timed out after 60 seconds for session {session_id[:8]}")
-                raise HTTPException(
-                    status_code=500,
-                    detail="Browser failed to start within 300 seconds. Check if Chrome/Chromium is installed and accessible."
-                )
             except Exception as e:
                 logger.error(f"❌ Browser startup failed for session {session_id[:8]}: {e}", exc_info=True)
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Browser failed to start: {str(e)}. Make sure Chrome/Chromium is installed (run setup_chrome.sh)."
+                    detail=f"Browser failed to start after multiple attempts: {str(e)}. Check logs for details."
                 )
             
             # Store session immediately to prevent duplicate creation
