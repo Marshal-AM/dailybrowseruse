@@ -134,74 +134,67 @@ class DailyBrowserStreamer:
         try:
             while not self.app_quit:
                 try:
-                    # Get current page (EXACTLY like fastapi_agent.py line 1031 - no timeout!)
-                    # Page is already loaded by the time we get here (200 OK means page loaded)
+                    # Get current page (EXACTLY like webbot - simple, direct)
                     page = loop.run_until_complete(self.browser.get_current_page())
                     if not page:
-                        logger.warning("No active page, skipping frame")
+                        if frame_count == 0:
+                            logger.info("Waiting for page to be ready...")
                         time.sleep(sleep_time)
                         continue
                     
-                    # Capture screenshot (EXACTLY like fastapi_agent.py line 1044 - no parameters, no timeout!)
-                    # Just like webbot's get_screenshot_as_png() - simple, direct call
+                    # Log first successful page access
+                    if frame_count == 0:
+                        logger.info("✅ Page ready, starting to capture frames...")
+                    
+                    # Capture screenshot (EXACTLY like webbot line 299 - simple, direct call)
+                    # Just like webbot's get_screenshot_as_png() - no parameters, no timeout
                     screenshot_data = loop.run_until_complete(page.screenshot())
                     
                     if not screenshot_data:
-                        logger.warning("Empty screenshot data, skipping frame")
+                        logger.warning("Empty screenshot data")
                         time.sleep(sleep_time)
                         continue
                     
                     # Handle both base64 string and bytes
                     if isinstance(screenshot_data, str):
                         screenshot_bytes = base64.b64decode(screenshot_data)
-                        logger.debug(f"Screenshot decoded from base64: {len(screenshot_bytes)} bytes")
                     else:
                         screenshot_bytes = screenshot_data
-                        logger.debug(f"Screenshot is bytes: {len(screenshot_bytes)} bytes")
                     
                     if not screenshot_bytes or len(screenshot_bytes) == 0:
-                        logger.warning("Empty screenshot bytes, skipping frame")
+                        logger.warning("Empty screenshot bytes")
                         time.sleep(sleep_time)
                         continue
                     
-                    # Convert to PIL Image
+                    # Convert to PIL Image (EXACTLY like webbot line 302)
                     image = Image.open(io.BytesIO(screenshot_bytes))
-                    logger.debug(f"Image opened: {image.size}, mode: {image.mode}")
                     
-                    # Resize if needed to match camera dimensions
+                    # Resize if needed to match camera dimensions (EXACTLY like webbot line 305-306)
                     if image.size != (self.width, self.height):
                         image = image.resize((self.width, self.height), Image.Resampling.LANCZOS)
-                        logger.debug(f"Image resized to {self.width}x{self.height}")
                     
-                    # Convert to RGB if needed
+                    # Convert to RGB if needed (EXACTLY like webbot line 309-310)
                     if image.mode != "RGB":
                         image = image.convert("RGB")
-                        logger.debug("Image converted to RGB")
                     
-                    # Convert to bytes (EXACTLY like guide.py line 71)
+                    # Convert to bytes and send (EXACTLY like webbot line 313-314)
                     image_bytes = image.tobytes()
-                    expected_size = self.width * self.height * 3
-                    logger.debug(f"Image bytes: {len(image_bytes)} bytes (expected: {expected_size})")
                     
-                    if len(image_bytes) != expected_size:
-                        logger.warning(f"Image bytes size mismatch: got {len(image_bytes)}, expected {expected_size}")
-                    
-                    # Write frame to camera (EXACTLY like guide.py line 74)
-                    logger.debug(f"Writing frame {frame_count + 1} to camera...")
+                    # Write frame to camera (EXACTLY like webbot line 314)
                     self.camera.write_frame(image_bytes)
                     frame_count += 1
                     
-                    # Log first frame immediately, then every 10 frames (1 second at 10 FPS)
+                    # Log first frame immediately, then every 10 frames
                     if frame_count == 1:
-                        logger.info(f"✅ Sent first frame! ({len(image_bytes)} bytes)")
+                        logger.info(f"✅ Sent first frame! ({len(image_bytes)} bytes, {image.size[0]}x{image.size[1]})")
                     elif frame_count % 10 == 0:
                         logger.info(f"✅ Sent {frame_count} frames")
                     
                 except Exception as e:
-                    logger.error(f"Error capturing/sending frame {frame_count + 1}: {e}", exc_info=True)
+                    logger.error(f"Error capturing/sending frame: {e}", exc_info=True)
                     # Continue loop even on error
                 
-                # Sleep between frames (EXACTLY like guide.py line 75)
+                # Sleep between frames (EXACTLY like webbot line 319)
                 time.sleep(sleep_time)
         
         finally:
