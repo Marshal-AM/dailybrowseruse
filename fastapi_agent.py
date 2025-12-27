@@ -69,8 +69,12 @@ USE_JUDGE = False  # Set to True to enable judge evaluation of agent tasks
 HEADLESS_MODE = os.getenv("HEADLESS_MODE", "false").lower() == "true"
 logger.info(f"🖥️ Headless mode: {HEADLESS_MODE}")
 
+# Server port - configurable via environment variable
+SERVER_PORT = int(os.getenv("PORT", "8080"))
+logger.info(f"🔌 Server port: {SERVER_PORT}")
+
 # API URL for bot to connect (use localhost for local dev, GCP URL for production)
-FASTAPI_URL = os.getenv("FASTAPI_URL", "http://localhost:8080")
+FASTAPI_URL = os.getenv("FASTAPI_URL", f"http://localhost:{SERVER_PORT}")
 logger.info(f"🔗 FastAPI URL for bot: {FASTAPI_URL}")
 
 # Chrome args for Docker/Cloud Run environments
@@ -994,13 +998,10 @@ if __name__ == "__main__":
     import uvicorn
     from pyngrok import ngrok
     
-    # Server port - use 8080 to match ngrok and FASTAPI_URL
-    SERVER_PORT = 8080
-    
     # Set ngrok authtoken
     ngrok.set_auth_token("2kEGVmoK5L1A7fSTRJ6k4n7YMkl_3jBZXFdHfibFjz6fh9LAN")
     
-    # Create tunnel
+    # Create tunnel (uses SERVER_PORT from environment or default 8080)
     public_url = ngrok.connect(SERVER_PORT)
     
     print("="*60)
@@ -1011,6 +1012,7 @@ if __name__ == "__main__":
     print(f"\n🌐 Public URL (ngrok): {public_url}")
     print(f"🌐 Public API docs: {public_url}/docs")
     print("\nMake sure OPENAI_API_KEY and DAILY_API_KEY are set in your environment!")
+    print(f"To change port, set PORT environment variable (current: {SERVER_PORT})")
     print("="*60)
     
     try:
