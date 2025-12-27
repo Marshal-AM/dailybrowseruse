@@ -74,11 +74,8 @@ class DailyBrowserStreamer:
         self.app_quit = False
         self.app_error = None
         self.start_event = threading.Event()
-        
-        # Start streaming thread BEFORE joining (EXACTLY like webbot line 257-258)
-        self.stream_thread = threading.Thread(target=self.send_frames)
-        self.stream_thread.start()
-        logger.info("✅ Streaming thread started")
+        self.stream_thread = None  # Will be started after page is ready (after 200 OK)
+        self._stream_started = False
         
     def on_joined(self, data, error):
         """Callback when bot joins the room. EXACTLY like webbot line 260-264."""
@@ -93,7 +90,7 @@ class DailyBrowserStreamer:
     def run(self):
         """
         Join the Daily room. EXACTLY like webbot line 266-277.
-        Thread is already running from __init__.
+        Streaming thread will be started after page is ready (after 200 OK).
         """
         self.client.join(
             self.meeting_url,
@@ -105,8 +102,20 @@ class DailyBrowserStreamer:
             },
             completion=self.on_joined,
         )
-        # Wait for thread to complete (EXACTLY like webbot line 277)
-        self.stream_thread.join()
+        # Wait for thread to complete (if it was started)
+        if self.stream_thread:
+            self.stream_thread.join()
+    
+    def start_streaming(self):
+        """
+        Start the streaming thread. Call this AFTER page is loaded (after 200 OK).
+        """
+        if not self._stream_started:
+            logger.info("🎬 Starting streaming thread (page is ready)...")
+            self.stream_thread = threading.Thread(target=self.send_frames)
+            self.stream_thread.start()
+            self._stream_started = True
+            logger.info("✅ Streaming thread started")
     
     def send_frames(self):
         """
@@ -148,8 +157,24 @@ class DailyBrowserStreamer:
                     
                     # Capture screenshot (EXACTLY like webbot line 299 - simple, direct call)
                     logger.info(f"📸 Capturing screenshot for frame {frame_count + 1}...")
-                    screenshot_data = loop.run_until_complete(page.screenshot())
-                    logger.info(f"📸 Screenshot captured: type={type(screenshot_data).__name__}, has_data={bool(screenshot_data)}")
+                    try:
+                        # Use asyncio.wait_for with a short timeout to prevent hanging
+                        # If it hangs, we'll get a timeout and can retry
+                        screenshot_data = loop.run_until_complete(
+                            asyncio.wait_for(page.screenshot(), timeout=2.0)
+                        )
+                        logger.info(f"📸 Screenshot captured successfully: type={type(screenshot_data).__name__}, length={len(screenshot_data) if screenshot_data else 0}")
+                    except asyncio.TimeoutError:
+                        logger.error(f"❌ Screenshot TIMEOUT after 2 seconds - screenshot() is hanging!")
+                        logger.error(f"   This usually means the page/browser is stuck or the event loop is blocked")
+                        time.sleep(sleep_time)
+                        continue
+                    except Exception as screenshot_ex:
+                        logger.error(f"❌ Screenshot EXCEPTION: {type(screenshot_ex).__name__}: {screenshot_ex}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                        time.sleep(sleep_time)
+                        continue
                     
                     if not screenshot_data:
                         logger.error("❌ Empty screenshot data!")
@@ -217,7 +242,8 @@ class DailyBrowserStreamer:
     def leave(self):
         """Leave the room and cleanup. EXACTLY like webbot line 279-285."""
         self.app_quit = True
-        self.stream_thread.join()
+        if self.stream_thread:
+            self.stream_thread.join()
         self.client.leave()
         self.client.release()
         logger.info("✅ Bot left Daily room")
