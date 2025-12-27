@@ -45,20 +45,33 @@ class DailyBrowserStreamer:
         self.width = width
         self.height = height
         
+        # Ensure Daily is initialized before creating camera device
+        # (In webbot, Daily.init() is called in main() before creating SendBrowserApp)
+        try:
+            Daily.init()
+            logger.info("✅ Daily SDK initialized in streamer")
+        except Exception as e:
+            logger.warning(f"Daily SDK already initialized or warning: {e}")
+        
         # Give browser time to load and render (like webbot does)
         logger.info("Waiting for browser to be ready...")
         time.sleep(3)
         logger.info("Browser ready, starting to stream frames...")
         
-        # Create camera device with browser dimensions (EXACTLY like webbot)
-        self.camera = Daily.create_camera_device(
-            "my-camera", width=width, height=height, color_format="RGB"
-        )
+        # Create camera device with browser dimensions (EXACTLY like webbot line 243-245)
+        try:
+            self.camera = Daily.create_camera_device(
+                "my-camera", width=width, height=height, color_format="RGB"
+            )
+            logger.info(f"✅ Camera device created: {width}x{height} RGB")
+        except Exception as e:
+            logger.error(f"❌ Failed to create camera device: {e}", exc_info=True)
+            raise
         
-        # Create Daily client (EXACTLY like webbot)
+        # Create Daily client (EXACTLY like webbot line 247)
         self.client = CallClient()
         
-        # Configure client to not subscribe to others' audio/video (EXACTLY like webbot)
+        # Configure client to not subscribe to others' audio/video (EXACTLY like webbot line 249-251)
         self.client.update_subscription_profiles(
             {"base": {"camera": "unsubscribed", "microphone": "unsubscribed"}}
         )
@@ -70,13 +83,17 @@ class DailyBrowserStreamer:
         # Start streaming thread BEFORE joining (EXACTLY like webbot line 257-258)
         self.stream_thread = threading.Thread(target=self.send_frames)
         self.stream_thread.start()
+        logger.info("✅ Streaming thread started")
         
     def on_joined(self, data, error):
         """Callback when bot joins the room. EXACTLY like webbot line 260-264."""
         if error:
             logger.error(f"Unable to join meeting: {error}")
             self.app_error = error
+        else:
+            logger.info("✅ Bot successfully joined Daily room")
         self.start_event.set()
+        logger.info("✅ Start event set, streaming thread can begin")
     
     def run(self):
         """
@@ -112,54 +129,94 @@ class DailyBrowserStreamer:
         
         logger.info(f"🎥 Starting to stream browser frames at {self.framerate} FPS")
         
+        # Create a single event loop for this thread (reuse it)
+        loop = None
+        frame_count = 0
+        
         while not self.app_quit:
             try:
-                # Run async screenshot capture in event loop
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                # Create/reuse event loop for async operations
+                if loop is None or loop.is_closed():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                 
-                try:
-                    # Get current page
-                    page = loop.run_until_complete(self.browser.get_current_page())
-                    if not page:
-                        logger.warning("No active page, skipping frame")
+                # Get current page
+                page = loop.run_until_complete(self.browser.get_current_page())
+                if not page:
+                    logger.warning("No active page, skipping frame")
+                    time.sleep(sleep_time)
+                    continue
+                
+                # Capture screenshot - browser-use page.screenshot() returns base64 string
+                # We need to decode it to get bytes (like webbot's get_screenshot_as_png returns bytes)
+                screenshot_data = loop.run_until_complete(page.screenshot())
+                
+                if not screenshot_data:
+                    logger.warning("Empty screenshot data, skipping frame")
+                    time.sleep(sleep_time)
+                    continue
+                
+                # Handle both base64 string and bytes
+                if isinstance(screenshot_data, str):
+                    # It's base64 encoded, decode it
+                    try:
+                        screenshot_bytes = base64.b64decode(screenshot_data)
+                    except Exception as decode_error:
+                        logger.error(f"Failed to decode base64 screenshot: {decode_error}")
                         time.sleep(sleep_time)
                         continue
-                    
-                    # Capture screenshot - browser-use page.screenshot() returns base64 string
-                    # We need to decode it to get bytes (like webbot's get_screenshot_as_png returns bytes)
-                    screenshot_data = loop.run_until_complete(page.screenshot())
-                    
-                    # Handle both base64 string and bytes
-                    if isinstance(screenshot_data, str):
-                        # It's base64 encoded, decode it
-                        screenshot_bytes = base64.b64decode(screenshot_data)
-                    else:
-                        # It's already bytes
-                        screenshot_bytes = screenshot_data
-                    
-                    # Convert to PIL Image (EXACTLY like webbot line 302)
+                else:
+                    # It's already bytes
+                    screenshot_bytes = screenshot_data
+                
+                if not screenshot_bytes or len(screenshot_bytes) == 0:
+                    logger.warning("Empty screenshot bytes, skipping frame")
+                    time.sleep(sleep_time)
+                    continue
+                
+                # Convert to PIL Image (EXACTLY like webbot line 302)
+                try:
                     image = Image.open(io.BytesIO(screenshot_bytes))
-                    
-                    # Resize if needed to match camera dimensions (EXACTLY like webbot line 305-306)
-                    if image.size != (self.width, self.height):
-                        image = image.resize((self.width, self.height), Image.Resampling.LANCZOS)
-                    
-                    # Convert to RGB if needed (EXACTLY like webbot line 309-310)
-                    if image.mode != "RGB":
-                        image = image.convert("RGB")
-                    
-                    # Convert to bytes and send (EXACTLY like webbot line 313-314)
-                    image_bytes = image.tobytes()
+                except Exception as image_error:
+                    logger.error(f"Failed to open image: {image_error}")
+                    time.sleep(sleep_time)
+                    continue
+                
+                # Resize if needed to match camera dimensions (EXACTLY like webbot line 305-306)
+                if image.size != (self.width, self.height):
+                    image = image.resize((self.width, self.height), Image.Resampling.LANCZOS)
+                
+                # Convert to RGB if needed (EXACTLY like webbot line 309-310)
+                if image.mode != "RGB":
+                    image = image.convert("RGB")
+                
+                # Convert to bytes and send (EXACTLY like webbot line 313-314)
+                image_bytes = image.tobytes()
+                
+                # Verify image bytes size matches expected (width * height * 3 for RGB)
+                expected_size = self.width * self.height * 3
+                if len(image_bytes) != expected_size:
+                    logger.warning(f"Image bytes size mismatch: got {len(image_bytes)}, expected {expected_size}")
+                
+                # Write frame to camera
+                try:
                     self.camera.write_frame(image_bytes)
-                    
-                finally:
-                    loop.close()
+                    frame_count += 1
+                    if frame_count % 30 == 0:  # Log every 30 frames (1 second at 30fps)
+                        logger.debug(f"Sent {frame_count} frames")
+                except Exception as write_error:
+                    logger.error(f"Failed to write frame: {write_error}")
                 
             except Exception as e:
                 logger.error(f"Error capturing frame: {e}", exc_info=True)
             
             time.sleep(sleep_time)
+        
+        # Clean up event loop
+        if loop and not loop.is_closed():
+            loop.close()
+        
+        logger.info(f"🛑 Stopped streaming browser frames (sent {frame_count} total frames)")
     
     def leave(self):
         """Leave the room and cleanup. EXACTLY like webbot line 279-285."""
