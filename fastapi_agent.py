@@ -222,9 +222,16 @@ async def execute_action(request: ActionRequest):
                         keep_alive=True,
                         args=CHROME_ARGS,
                     )
-                    await browser.start()
+                    # Use same timeout and error handling as new session
+                    await asyncio.wait_for(browser.start(), timeout=60.0)
                     session_data["browser"] = browser
                     is_new_session = True  # Need to navigate since browser was recreated
+                except asyncio.TimeoutError:
+                    logger.error(f"❌ Browser recreation timed out")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Browser session lost and failed to recreate (timeout). Check if Playwright Chromium is installed: playwright install chromium"
+                    )
                 except Exception as recreate_error:
                     logger.error(f"❌ Failed to recreate browser: {recreate_error}", exc_info=True)
                     raise HTTPException(
@@ -255,8 +262,69 @@ async def execute_action(request: ActionRequest):
             # Start browser session ONCE - this creates the browser window
             logger.info(f"🚀 Starting browser for session {session_id[:8]}...")
             logger.info(f"🔍 Browser instance ID: {id(browser)}")
-            await browser.start()
-            logger.info(f"✅ Browser started for session {session_id[:8]}")
+            logger.info(f"🔍 Headless mode: {HEADLESS_MODE}")
+            logger.info(f"🔍 Chrome args: {CHROME_ARGS}")
+            
+            # Add diagnostics before starting
+            try:
+                # Check if Playwright browsers are installed
+                import subprocess
+                playwright_check = subprocess.run(
+                    ["python", "-c", "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); print(p.chromium.executable_path); p.stop()"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if playwright_check.returncode == 0:
+                    playwright_chrome = playwright_check.stdout.strip()
+                    logger.info(f"✅ Playwright Chromium found at: {playwright_chrome}")
+                else:
+                    logger.warning(f"⚠️ Playwright Chromium check failed: {playwright_check.stderr}")
+                    logger.warning("💡 Run: playwright install chromium")
+            except Exception as diag_error:
+                logger.warning(f"⚠️ Could not check Playwright: {diag_error}")
+            
+            # Check system resources
+            try:
+                import psutil
+                memory = psutil.virtual_memory()
+                logger.info(f"💾 System memory: {memory.percent}% used, {memory.available / (1024**3):.2f} GB available")
+                if memory.available < 500 * 1024 * 1024:  # Less than 500MB
+                    logger.warning("⚠️ Low memory available - Chrome may fail to start")
+            except ImportError:
+                logger.debug("psutil not available for memory check")
+            except Exception as mem_error:
+                logger.debug(f"Memory check failed: {mem_error}")
+            
+            # Try to start browser with timeout and better error handling
+            try:
+                await asyncio.wait_for(browser.start(), timeout=60.0)
+                logger.info(f"✅ Browser started for session {session_id[:8]}")
+            except asyncio.TimeoutError:
+                logger.error(f"❌ Browser startup timed out after 60s for session {session_id[:8]}")
+                # Check if Chrome process is running
+                try:
+                    import psutil
+                    chrome_processes = [p for p in psutil.process_iter(['pid', 'name', 'cmdline']) 
+                                      if 'chrome' in p.info['name'].lower() or 'chromium' in p.info['name'].lower()]
+                    if chrome_processes:
+                        logger.error(f"⚠️ Found {len(chrome_processes)} Chrome/Chromium processes running:")
+                        for proc in chrome_processes[:5]:  # Show first 5
+                            logger.error(f"   PID {proc.info['pid']}: {proc.info['name']}")
+                    else:
+                        logger.error("⚠️ No Chrome/Chromium processes found - browser didn't start")
+                except:
+                    pass
+                raise HTTPException(
+                    status_code=500,
+                    detail="Browser startup timed out. Chrome/Chromium may not be installed or CDP connection failed. Check logs and run: playwright install chromium"
+                )
+            except Exception as start_error:
+                logger.error(f"❌ Browser startup failed: {start_error}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Browser failed to start: {str(start_error)}. Ensure Playwright Chromium is installed: playwright install chromium"
+                )
             
             # Store session immediately to prevent duplicate creation
             active_sessions[session_id] = {
