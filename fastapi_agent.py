@@ -253,7 +253,7 @@ async def execute_action(request: ActionRequest):
                         keep_alive=True,
                         args=CHROME_ARGS,
                     )
-                    await asyncio.wait_for(browser.start(), timeout=60.0)
+                    await asyncio.wait_for(browser.start(), timeout=300.0)
                     session_data["browser"] = browser
                     is_new_session = True  # Need to navigate since browser was recreated
                 except Exception as recreate_error:
@@ -299,13 +299,13 @@ async def execute_action(request: ActionRequest):
             # Start browser session ONCE - this creates the browser window
             # Add timeout and better error handling
             try:
-                await asyncio.wait_for(browser.start(), timeout=60.0)  # 60 second timeout
+                await asyncio.wait_for(browser.start(), timeout=300.0)  # 60 second timeout
                 logger.info(f"✅ Browser started for session {session_id[:8]}")
             except asyncio.TimeoutError:
                 logger.error(f"❌ Browser startup timed out after 60 seconds for session {session_id[:8]}")
                 raise HTTPException(
                     status_code=500,
-                    detail="Browser failed to start within 60 seconds. Check if Chrome/Chromium is installed and accessible."
+                    detail="Browser failed to start within 300 seconds. Check if Chrome/Chromium is installed and accessible."
                 )
             except Exception as e:
                 logger.error(f"❌ Browser startup failed for session {session_id[:8]}: {e}", exc_info=True)
