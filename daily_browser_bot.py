@@ -2,10 +2,11 @@
 Daily.co Browser Streaming Bot
 
 This bot joins a Daily.co room and streams browser screenshots as video frames.
-Based on the webbot/videotest.py implementation, adapted for browser-use (Playwright).
+EXACTLY matches webbot/videotest.py implementation, adapted for browser-use (Playwright).
 """
 
 import asyncio
+import base64
 import io
 import logging
 import threading
@@ -21,11 +22,13 @@ logger = logging.getLogger(__name__)
 class DailyBrowserStreamer:
     """
     Streams browser screenshots to a Daily.co room.
+    EXACTLY matches webbot/videotest.py SendBrowserApp class structure.
     """
     
     def __init__(self, session_id: str, browser, meeting_url: str, framerate: int = 30, width: int = 1280, height: int = 720):
         """
         Initialize the browser streamer.
+        Matches webbot/videotest.py __init__ structure exactly.
         
         Args:
             session_id: Browser session ID
@@ -42,20 +45,20 @@ class DailyBrowserStreamer:
         self.width = width
         self.height = height
         
-        # Create camera device (use simple name like webbot)
-        # Device ID must match the one used in client_settings
-        self.camera_device_id = "my-camera"
+        # Give browser time to load and render (like webbot does)
+        logger.info("Waiting for browser to be ready...")
+        time.sleep(3)
+        logger.info("Browser ready, starting to stream frames...")
+        
+        # Create camera device with browser dimensions (EXACTLY like webbot)
         self.camera = Daily.create_camera_device(
-            self.camera_device_id,
-            width=width,
-            height=height,
-            color_format="RGB"
+            "my-camera", width=width, height=height, color_format="RGB"
         )
         
-        # Create Daily client
+        # Create Daily client (EXACTLY like webbot)
         self.client = CallClient()
         
-        # Configure client to not subscribe to others' audio/video
+        # Configure client to not subscribe to others' audio/video (EXACTLY like webbot)
         self.client.update_subscription_profiles(
             {"base": {"camera": "unsubscribed", "microphone": "unsubscribed"}}
         )
@@ -63,60 +66,49 @@ class DailyBrowserStreamer:
         self.app_quit = False
         self.app_error = None
         self.start_event = threading.Event()
-        self.stream_thread = None
+        
+        # Start streaming thread BEFORE joining (EXACTLY like webbot line 257-258)
+        self.stream_thread = threading.Thread(target=self.send_frames)
+        self.stream_thread.start()
         
     def on_joined(self, data, error):
-        """Callback when bot joins the room."""
+        """Callback when bot joins the room. EXACTLY like webbot line 260-264."""
         if error:
             logger.error(f"Unable to join meeting: {error}")
             self.app_error = error
-        else:
-            logger.info(f"✅ Bot joined Daily room successfully")
         self.start_event.set()
     
     def run(self):
         """
-        Join the Daily room and start streaming.
-        This method is synchronous and blocks until streaming stops.
+        Join the Daily room. EXACTLY like webbot line 266-277.
+        Thread is already running from __init__.
         """
-        # Join the room (synchronous call from Daily SDK)
-        # Device ID must match the camera device name (like webbot uses "my-camera")
         self.client.join(
             self.meeting_url,
             client_settings={
                 "inputs": {
-                    "camera": {"isEnabled": True, "settings": {"deviceId": self.camera_device_id}},
+                    "camera": {"isEnabled": True, "settings": {"deviceId": "my-camera"}},
                     "microphone": False,
                 }
             },
             completion=self.on_joined,
         )
-        
-        # Start streaming thread
-        self.stream_thread = threading.Thread(target=self._stream_frames, daemon=True)
-        self.stream_thread.start()
-        
-        # Wait for thread to complete (or until quit)
+        # Wait for thread to complete (EXACTLY like webbot line 277)
         self.stream_thread.join()
     
-    def _stream_frames(self):
+    def send_frames(self):
         """
         Continuously capture browser screenshots and send as video frames.
-        Runs in a separate thread.
-        Matches webbot/videotest.py implementation.
+        EXACTLY matches webbot/videotest.py send_frames() method (line 287-319).
         """
-        # Wait for join to complete
+        # Wait for join to complete (EXACTLY like webbot line 288)
         self.start_event.wait()
         
         if self.app_error:
-            logger.error(f"Unable to stream frames: {self.app_error}")
+            logger.error(f"Unable to send frames!")
             return
         
         sleep_time = 1.0 / self.framerate
-        
-        # Give browser time to load and render (like webbot does)
-        logger.info("Waiting for browser to be ready...")
-        time.sleep(2)
         
         logger.info(f"🎥 Starting to stream browser frames at {self.framerate} FPS")
         
@@ -134,22 +126,30 @@ class DailyBrowserStreamer:
                         time.sleep(sleep_time)
                         continue
                     
-                    # Capture screenshot - page.screenshot() returns BYTES, not base64!
-                    # This matches how webbot uses driver.get_screenshot_as_png() which returns PNG bytes
-                    screenshot_bytes = loop.run_until_complete(page.screenshot())
+                    # Capture screenshot - browser-use page.screenshot() returns base64 string
+                    # We need to decode it to get bytes (like webbot's get_screenshot_as_png returns bytes)
+                    screenshot_data = loop.run_until_complete(page.screenshot())
                     
-                    # Convert bytes directly to PIL Image (like webbot does)
+                    # Handle both base64 string and bytes
+                    if isinstance(screenshot_data, str):
+                        # It's base64 encoded, decode it
+                        screenshot_bytes = base64.b64decode(screenshot_data)
+                    else:
+                        # It's already bytes
+                        screenshot_bytes = screenshot_data
+                    
+                    # Convert to PIL Image (EXACTLY like webbot line 302)
                     image = Image.open(io.BytesIO(screenshot_bytes))
                     
-                    # Resize if needed to match camera dimensions
+                    # Resize if needed to match camera dimensions (EXACTLY like webbot line 305-306)
                     if image.size != (self.width, self.height):
                         image = image.resize((self.width, self.height), Image.Resampling.LANCZOS)
                     
-                    # Convert to RGB if needed
+                    # Convert to RGB if needed (EXACTLY like webbot line 309-310)
                     if image.mode != "RGB":
                         image = image.convert("RGB")
                     
-                    # Convert to bytes and send (exactly like webbot)
+                    # Convert to bytes and send (EXACTLY like webbot line 313-314)
                     image_bytes = image.tobytes()
                     self.camera.write_frame(image_bytes)
                     
@@ -160,14 +160,11 @@ class DailyBrowserStreamer:
                 logger.error(f"Error capturing frame: {e}", exc_info=True)
             
             time.sleep(sleep_time)
-        
-        logger.info("🛑 Stopped streaming browser frames")
     
     def leave(self):
-        """Leave the room and cleanup."""
+        """Leave the room and cleanup. EXACTLY like webbot line 279-285."""
         self.app_quit = True
-        if self.stream_thread:
-            self.stream_thread.join(timeout=5.0)
+        self.stream_thread.join()
         self.client.leave()
         self.client.release()
         logger.info("✅ Bot left Daily room")
