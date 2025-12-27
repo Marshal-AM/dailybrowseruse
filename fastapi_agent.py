@@ -165,6 +165,8 @@ class ActionResponse(BaseModel):
     """Response model for agent actions"""
     session_id: str
     urls_visited: list[str]
+    daily_room_url: Optional[str] = None  # Daily room URL (if room was auto-created)
+    daily_room_name: Optional[str] = None  # Daily room name (if room was auto-created)
 
 
 class SessionInfo(BaseModel):
@@ -362,6 +364,69 @@ async def execute_action(request: ActionRequest):
                 "total_steps": 0,
             }
             logger.info(f"💾 Session {session_id[:8]} stored in memory")
+            
+            # AUTOMATICALLY create Daily room and start streaming for new sessions
+            # This matches webbot behavior - room is created automatically when bot starts
+            try:
+                from daily_service import get_daily_service
+                from daily_browser_bot import start_daily_bot
+                
+                daily_service = get_daily_service()
+                if daily_service:
+                    logger.info(f"🎥 Auto-creating Daily room for new session {session_id[:8]}...")
+                    
+                    # Create room
+                    room_data = await daily_service.create_room(
+                        name=f"browser-session-{session_id[:8]}"
+                    )
+                    
+                    room_url = room_data.get("url")
+                    room_name = room_data.get("name")
+                    
+                    if room_url:
+                        # Store room info in session
+                        active_sessions[session_id]["daily_room"] = {
+                            "url": room_url,
+                            "name": room_name
+                        }
+                        
+                        # Store globally for /room-info endpoint
+                        global _current_room_info
+                        _current_room_info = {
+                            "roomName": room_name,
+                            "url": room_url
+                        }
+                        
+                        logger.info(f"✅ Created Daily room: {room_name} ({room_url})")
+                        
+                        # Start bot to stream browser video
+                        try:
+                            logger.info(f"🤖 Starting Daily browser streaming bot...")
+                            bot_id = start_daily_bot(
+                                session_id=session_id,
+                                browser=browser,
+                                meeting_url=room_url,
+                                framerate=30,
+                                width=1280,
+                                height=720
+                            )
+                            active_sessions[session_id]["bot_id"] = bot_id
+                            logger.info(f"✅ Bot started: {bot_id}")
+                            logger.info(f"🎬 Room URL for joining: {room_url}")
+                        except Exception as bot_error:
+                            logger.error(f"❌ Failed to start bot: {bot_error}", exc_info=True)
+                            # Don't fail the whole request if bot fails - room is still created
+                            try:
+                                await daily_service.delete_room(room_name)
+                            except:
+                                pass
+                    else:
+                        logger.warning(f"⚠️ Failed to get room URL from Daily API")
+                else:
+                    logger.debug("Daily service not configured - skipping auto room creation")
+            except Exception as daily_error:
+                # Don't fail the whole request if Daily setup fails
+                logger.warning(f"⚠️ Failed to auto-create Daily room: {daily_error}")
         
         # Only navigate if this is a NEW session
         if is_new_session:
@@ -617,9 +682,19 @@ CRITICAL RULES FOR ELEMENT SELECTION:
         if session_id in active_sessions:
             active_sessions[session_id]["total_steps"] = active_sessions[session_id].get("total_steps", 0) + steps_taken
         
+        # Include Daily room URL in response if available
+        daily_room_url = None
+        daily_room_name = None
+        if session_id in active_sessions and "daily_room" in active_sessions[session_id]:
+            daily_room = active_sessions[session_id]["daily_room"]
+            daily_room_url = daily_room["url"]
+            daily_room_name = daily_room["name"]
+        
         return ActionResponse(
             session_id=session_id,
             urls_visited=urls_visited,
+            daily_room_url=daily_room_url,
+            daily_room_name=daily_room_name,
         )
         
     except Exception as e:
