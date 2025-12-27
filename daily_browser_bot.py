@@ -147,48 +147,59 @@ class DailyBrowserStreamer:
                         logger.info("✅ Page ready, starting to capture frames...")
                     
                     # Capture screenshot (EXACTLY like webbot line 299 - simple, direct call)
-                    # Just like webbot's get_screenshot_as_png() - no parameters, no timeout
+                    logger.info(f"📸 Capturing screenshot for frame {frame_count + 1}...")
                     screenshot_data = loop.run_until_complete(page.screenshot())
+                    logger.info(f"📸 Screenshot captured: type={type(screenshot_data).__name__}, has_data={bool(screenshot_data)}")
                     
                     if not screenshot_data:
-                        logger.warning("Empty screenshot data")
+                        logger.error("❌ Empty screenshot data!")
                         time.sleep(sleep_time)
                         continue
                     
                     # Handle both base64 string and bytes
                     if isinstance(screenshot_data, str):
+                        logger.info(f"📸 Decoding base64 screenshot (str length: {len(screenshot_data)})...")
                         screenshot_bytes = base64.b64decode(screenshot_data)
+                        logger.info(f"📸 Decoded to {len(screenshot_bytes)} bytes")
                     else:
                         screenshot_bytes = screenshot_data
+                        logger.info(f"📸 Screenshot is bytes: {len(screenshot_bytes)} bytes")
                     
                     if not screenshot_bytes or len(screenshot_bytes) == 0:
-                        logger.warning("Empty screenshot bytes")
+                        logger.error("❌ Empty screenshot bytes after processing!")
                         time.sleep(sleep_time)
                         continue
                     
                     # Convert to PIL Image (EXACTLY like webbot line 302)
+                    logger.info(f"🖼️ Converting to PIL Image from {len(screenshot_bytes)} bytes...")
                     image = Image.open(io.BytesIO(screenshot_bytes))
+                    logger.info(f"🖼️ Image opened: {image.size}, mode: {image.mode}")
                     
                     # Resize if needed to match camera dimensions (EXACTLY like webbot line 305-306)
                     if image.size != (self.width, self.height):
+                        logger.info(f"🖼️ Resizing from {image.size} to {self.width}x{self.height}...")
                         image = image.resize((self.width, self.height), Image.Resampling.LANCZOS)
                     
                     # Convert to RGB if needed (EXACTLY like webbot line 309-310)
                     if image.mode != "RGB":
+                        logger.info(f"🖼️ Converting from {image.mode} to RGB...")
                         image = image.convert("RGB")
                     
                     # Convert to bytes and send (EXACTLY like webbot line 313-314)
+                    logger.info(f"💾 Converting image to bytes...")
                     image_bytes = image.tobytes()
+                    expected_size = self.width * self.height * 3
+                    logger.info(f"💾 Image bytes: {len(image_bytes)} bytes (expected: {expected_size})")
                     
                     # Write frame to camera (EXACTLY like webbot line 314)
+                    logger.info(f"📤 Writing frame {frame_count + 1} to camera...")
                     self.camera.write_frame(image_bytes)
                     frame_count += 1
+                    logger.info(f"✅ Sent frame {frame_count}! ({len(image_bytes)} bytes, {image.size[0]}x{image.size[1]})")
                     
-                    # Log first frame immediately, then every 10 frames
-                    if frame_count == 1:
-                        logger.info(f"✅ Sent first frame! ({len(image_bytes)} bytes, {image.size[0]}x{image.size[1]})")
-                    elif frame_count % 10 == 0:
-                        logger.info(f"✅ Sent {frame_count} frames")
+                    # Log every 10 frames after first
+                    if frame_count > 1 and frame_count % 10 == 0:
+                        logger.info(f"✅ Sent {frame_count} frames total")
                     
                 except Exception as e:
                     logger.error(f"Error capturing/sending frame: {e}", exc_info=True)
