@@ -406,7 +406,7 @@ async def execute_action(request: ActionRequest):
                                 session_id=session_id,
                                 browser=browser,
                                 meeting_url=room_url,
-                                framerate=30,
+                                framerate=10,  # Lower FPS for stability
                                 width=1280,
                                 height=720
                             )
@@ -790,7 +790,7 @@ async def create_daily_room(request: CreateRoomRequest):
                 session_id=request.session_id,
                 browser=browser,
                 meeting_url=room_url,
-                framerate=30,
+                framerate=10,  # Lower FPS for stability
                 width=1280,
                 height=720
             )
