@@ -44,6 +44,7 @@ class DailyBrowserStreamer:
         self.framerate = framerate
         self.width = width
         self.height = height
+        self.main_loop = None  # Will store the main event loop
         
         # NOTE: Daily.init() is called in start_daily_bot() before creating this streamer
         # Do NOT call Daily.init() here - it will cause "Execution context already exists" error
@@ -106,11 +107,16 @@ class DailyBrowserStreamer:
         if self.stream_thread:
             self.stream_thread.join()
     
-    def start_streaming(self):
+    def start_streaming(self, main_loop=None):
         """
         Start the streaming thread. Call this AFTER page is loaded (after 200 OK).
+        
+        Args:
+            main_loop: The main asyncio event loop (from FastAPI). If provided, 
+                      screenshots will run in that loop to avoid event loop conflicts.
         """
         if not self._stream_started:
+            self.main_loop = main_loop
             logger.info("🎬 Starting streaming thread (page is ready)...")
             self.stream_thread = threading.Thread(target=self.send_frames)
             self.stream_thread.start()
@@ -134,17 +140,30 @@ class DailyBrowserStreamer:
         
         logger.info(f"🎥 Starting to stream browser frames at {self.framerate} FPS")
         
-        # Create a single event loop for this thread (reuse it for async browser operations)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
         frame_count = 0
         
         try:
             while not self.app_quit:
                 try:
-                    # Get current page (EXACTLY like webbot - simple, direct)
-                    page = loop.run_until_complete(self.browser.get_current_page())
+                    # Use main event loop if available, otherwise create new one
+                    if self.main_loop and self.main_loop.is_running():
+                        # Use run_coroutine_threadsafe to run in main loop
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.browser.get_current_page(), 
+                            self.main_loop
+                        )
+                        page = future.result(timeout=2.0)
+                    else:
+                        # Fallback: create new event loop (may have issues)
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            page = loop.run_until_complete(
+                                asyncio.wait_for(self.browser.get_current_page(), timeout=2.0)
+                            )
+                        finally:
+                            loop.close()
+                    
                     if not page:
                         if frame_count == 0:
                             logger.info("Waiting for page to be ready...")
@@ -158,15 +177,27 @@ class DailyBrowserStreamer:
                     # Capture screenshot (EXACTLY like webbot line 299 - simple, direct call)
                     logger.info(f"📸 Capturing screenshot for frame {frame_count + 1}...")
                     try:
-                        # Use asyncio.wait_for with a short timeout to prevent hanging
-                        # If it hangs, we'll get a timeout and can retry
-                        screenshot_data = loop.run_until_complete(
-                            asyncio.wait_for(page.screenshot(), timeout=2.0)
-                        )
+                        # Use main event loop if available to avoid event loop conflicts
+                        if self.main_loop and self.main_loop.is_running():
+                            future = asyncio.run_coroutine_threadsafe(
+                                page.screenshot(), 
+                                self.main_loop
+                            )
+                            screenshot_data = future.result(timeout=2.0)
+                        else:
+                            # Fallback: use new event loop
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                screenshot_data = loop.run_until_complete(
+                                    asyncio.wait_for(page.screenshot(), timeout=2.0)
+                                )
+                            finally:
+                                loop.close()
+                        
                         logger.info(f"📸 Screenshot captured successfully: type={type(screenshot_data).__name__}, length={len(screenshot_data) if screenshot_data else 0}")
                     except asyncio.TimeoutError:
-                        logger.error(f"❌ Screenshot TIMEOUT after 2 seconds - screenshot() is hanging!")
-                        logger.error(f"   This usually means the page/browser is stuck or the event loop is blocked")
+                        logger.error(f"❌ Screenshot TIMEOUT after 2 seconds!")
                         time.sleep(sleep_time)
                         continue
                     except Exception as screenshot_ex:
@@ -313,11 +344,16 @@ def start_daily_bot(
     return bot_id
 
 
-def start_streaming_for_bot(bot_id: str):
-    """Start streaming for a bot (call this after page is loaded, after 200 OK)."""
+def start_streaming_for_bot(bot_id: str, main_loop=None):
+    """Start streaming for a bot (call this after page is loaded, after 200 OK).
+    
+    Args:
+        bot_id: Bot ID to start streaming for
+        main_loop: Main asyncio event loop (from FastAPI) to run screenshots in
+    """
     if bot_id in _active_streamers:
         streamer = _active_streamers[bot_id]
-        streamer.start_streaming()
+        streamer.start_streaming(main_loop)
         logger.info(f"🎬 Started streaming for bot {bot_id}")
     else:
         logger.warning(f"Bot {bot_id} not found for streaming start")
