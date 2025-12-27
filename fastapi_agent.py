@@ -108,7 +108,7 @@ async def notify_server_bot(room_url: str, session_id: str, room_token: Optional
         room_token: Optional room token (if needed)
     """
     if not SERVER_BOT_URL:
-        logger.debug("Server bot URL not configured, skipping notification")
+        logger.warning("⚠️ SERVER_BOT_URL not configured, skipping server bot notification")
         return
     
     join_url = f"{SERVER_BOT_URL.rstrip('/')}/join-room"
@@ -121,24 +121,34 @@ async def notify_server_bot(room_url: str, session_id: str, room_token: Optional
     if room_token:
         payload["room_token"] = room_token
     
+    logger.info(f"📤 Sending POST request to server bot: {join_url}")
+    logger.info(f"📤 Payload: room_url={room_url[:50]}..., session_id={session_id[:8]}")
+    
     try:
-        logger.info(f"📤 Notifying server bot to join room: {room_url[:50]}...")
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 join_url,
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as response:
+                response_text = await response.text()
+                logger.info(f"📥 Server bot response status: {response.status}")
+                logger.info(f"📥 Server bot response body: {response_text[:200]}")
+                
                 if response.status == 200:
-                    result = await response.json()
-                    logger.info(f"✅ Server bot notified successfully: {result.get('message', 'OK')}")
+                    try:
+                        result = await response.json() if response_text else {}
+                        logger.info(f"✅ Server bot notified successfully: {result.get('message', 'OK')}")
+                    except:
+                        logger.info(f"✅ Server bot responded with status 200: {response_text[:100]}")
                 else:
-                    error_text = await response.text()
-                    logger.warning(f"⚠️ Server bot notification returned {response.status}: {error_text}")
+                    logger.warning(f"⚠️ Server bot notification returned {response.status}: {response_text[:200]}")
     except asyncio.TimeoutError:
-        logger.warning(f"⚠️ Server bot notification timed out")
+        logger.error(f"❌ Server bot notification timed out after 10 seconds")
+    except aiohttp.ClientError as e:
+        logger.error(f"❌ HTTP error notifying server bot: {e}")
     except Exception as e:
-        logger.warning(f"⚠️ Failed to notify server bot: {e}")
+        logger.error(f"❌ Failed to notify server bot: {e}", exc_info=True)
 
 # Chrome args for Docker/Cloud Run/Vast AI environments
 # Always include essential args for server environments, even in non-headless mode
@@ -473,6 +483,17 @@ async def execute_action(request: ActionRequest):
                                 await daily_service.delete_room(room_name)
                             except:
                                 pass
+                        
+                        # Notify server bot to join the room (if configured)
+                        if SERVER_BOT_URL:
+                            logger.info(f"📤 Attempting to notify server bot at {SERVER_BOT_URL}...")
+                            try:
+                                await notify_server_bot(room_url, session_id, room_token=None)
+                            except Exception as notify_error:
+                                logger.warning(f"⚠️ Failed to notify server bot: {notify_error}", exc_info=True)
+                                # Don't fail the request if notification fails
+                        else:
+                            logger.debug("🤖 SERVER_BOT_URL not set - skipping server bot notification")
                     else:
                         logger.warning(f"⚠️ Failed to get room URL from Daily API")
                 else:
