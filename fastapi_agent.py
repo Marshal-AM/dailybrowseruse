@@ -67,7 +67,13 @@ USE_JUDGE = False  # Set to True to enable judge evaluation of agent tasks
 
 # Headless mode configuration (for Cloud Run / production)
 # Automatically set to True in Cloud Run, or set HEADLESS_MODE=true in .env
-HEADLESS_MODE = os.getenv("HEADLESS_MODE", "false").lower() == "true"
+# For Vast AI and server environments, force headless mode
+HEADLESS_MODE = os.getenv("HEADLESS_MODE", "true").lower() == "true"  # Default to true for servers
+# Also check if we're in a server environment (no DISPLAY)
+# Force headless mode if DISPLAY is not set and HEADLESS_MODE wasn't explicitly set
+if not os.getenv("DISPLAY") and os.getenv("HEADLESS_MODE") is None:
+    HEADLESS_MODE = True
+    logger.info("🖥️ No DISPLAY found, forcing headless mode")
 logger.info(f"🖥️ Headless mode: {HEADLESS_MODE}")
 
 # Server port - configurable via environment variable
@@ -81,13 +87,14 @@ logger.info(f"🔗 FastAPI URL for bot: {FASTAPI_URL}")
 # Simplified browser initialization - matching guide.py approach
 # browser-use/Playwright handles Chrome management internally, so we keep it simple
 
-# Chrome args for Docker/Cloud Run environments
-# Simplified to match guide.py - browser-use/Playwright handles Chrome internally
+# Chrome args for Docker/Cloud Run/Vast AI environments
+# Always include essential args for server environments, even in non-headless mode
+# These are required for Chrome to work in containerized/server environments
 CHROME_ARGS = [
-    '--no-sandbox',  # Required for Docker
+    '--no-sandbox',  # Required for Docker/Vast AI
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',  # Overcome limited resource problems
-    '--disable-gpu',  # Disable GPU acceleration
+    '--disable-gpu',  # Disable GPU acceleration (required for headless, helpful for servers)
     '--disable-software-rasterizer',
     '--disable-extensions',
     '--disable-background-networking',
@@ -97,7 +104,14 @@ CHROME_ARGS = [
     '--no-first-run',
     '--safebrowsing-disable-auto-update',
     '--disable-blink-features=AutomationControlled',
-] if HEADLESS_MODE else []  # Only apply these flags in headless/Cloud Run mode
+]
+
+# Add headless flag if in headless mode
+if HEADLESS_MODE:
+    CHROME_ARGS.append('--headless=new')
+
+logger.info(f"🔧 Chrome args ({len(CHROME_ARGS)} flags): {CHROME_ARGS[:5]}...")  # Log first 5 args
+logger.info(f"🔧 Full Chrome args: {CHROME_ARGS}")  # Log all args for debugging
 
 
 # ============================================================================
@@ -278,6 +292,21 @@ async def execute_action(request: ActionRequest):
                 if playwright_check.returncode == 0:
                     playwright_chrome = playwright_check.stdout.strip()
                     logger.info(f"✅ Playwright Chromium found at: {playwright_chrome}")
+                    
+                    # Test if Chrome can actually run with our args
+                    logger.info("🧪 Testing Chrome executable with our args...")
+                    test_args = CHROME_ARGS + ['--version']
+                    test_result = subprocess.run(
+                        [playwright_chrome] + test_args,
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if test_result.returncode == 0:
+                        logger.info(f"✅ Chrome executable test passed: {test_result.stdout.strip()}")
+                    else:
+                        logger.warning(f"⚠️ Chrome executable test failed: {test_result.stderr}")
+                        logger.warning(f"   Test command: {playwright_chrome} {' '.join(test_args)}")
                 else:
                     logger.warning(f"⚠️ Playwright Chromium check failed: {playwright_check.stderr}")
                     logger.warning("💡 Run: playwright install chromium")
