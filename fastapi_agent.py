@@ -78,10 +78,12 @@ logger.info(f"🔌 Server port: {SERVER_PORT}")
 FASTAPI_URL = os.getenv("FASTAPI_URL", f"http://localhost:{SERVER_PORT}")
 logger.info(f"🔗 FastAPI URL for bot: {FASTAPI_URL}")
 
-# Verify Chrome/Chromium is available
-def check_chrome_available():
-    """Check if Chrome/Chromium is installed and accessible."""
+# Verify Chrome/Chromium is available and test it can start
+def find_chrome_binary():
+    """Find Chrome/Chromium binary path (similar to webbot approach)."""
     chrome_paths = [
+        "/snap/chromium/current/usr/lib/chromium-browser/chromium-browser",
+        "/snap/bin/chromium",
         shutil.which("chromium"),
         shutil.which("chromium-browser"),
         shutil.which("google-chrome"),
@@ -90,36 +92,96 @@ def check_chrome_available():
         "/usr/bin/chromium-browser",
         "/usr/bin/google-chrome",
         "/usr/bin/google-chrome-stable",
-        "/snap/bin/chromium",
     ]
+    # Filter out None values and check if paths exist
     for path in chrome_paths:
         if path and os.path.exists(path):
             logger.info(f"✅ Found Chrome/Chromium at: {path}")
+            return path
+    return None
+
+def test_chrome_startup(chrome_binary):
+    """Test if Chrome can start with our required flags (similar to webbot)."""
+    if not chrome_binary:
+        return False
+    
+    try:
+        logger.info(f"🧪 Testing Chrome startup: {chrome_binary}")
+        test_result = subprocess.run(
+            [chrome_binary, "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if test_result.returncode == 0:
+            logger.info(f"✅ Chrome test passed: {test_result.stdout.strip()}")
             return True
+        else:
+            logger.warning(f"⚠️ Chrome test failed: {test_result.stderr}")
+            return False
+    except Exception as e:
+        logger.warning(f"⚠️ Chrome test error: {e}")
+        return False
+
+# Find and test Chrome on startup
+_chrome_binary = find_chrome_binary()
+_chrome_available = _chrome_binary is not None
+
+if _chrome_available:
+    # Test Chrome can actually start
+    if not test_chrome_startup(_chrome_binary):
+        logger.warning("⚠️ Chrome found but startup test failed. Browser may still work.")
+else:
     logger.warning("⚠️ Chrome/Chromium not found in PATH. Browser startup may fail.")
     logger.warning("💡 Run setup_chrome.sh to install Chrome/Chromium")
-    return False
-
-# Check Chrome availability on startup
-_chrome_available = check_chrome_available()
 
 # UPDATED: Browser initialization with better error handling and longer timeout
 async def create_browser_with_retry(max_retries=3, timeout=120):
-    """Create browser with retry logic and better error handling."""
+    """Create browser with retry logic and better error handling.
+    
+    Similar approach to webbot/videotest.py but using browser-use (Playwright).
+    """
     last_error = None
+    
+    # If we found Chrome binary, try to set it explicitly
+    browser_kwargs = {
+        'headless': HEADLESS_MODE,
+        'window_size': {'width': 1280, 'height': 720},
+        'keep_alive': True,
+        'args': CHROME_ARGS,
+    }
+    
+    # Try to set executable path if we found Chrome binary
+    # Note: browser-use uses Playwright, which may support executable_path
+    # Check if browser-use Browser class supports this
+    if _chrome_binary:
+        logger.info(f"🔧 Using Chrome binary: {_chrome_binary}")
+        # Some Playwright wrappers support executable_path or channel
+        # Try both approaches
+        try:
+            # Check if Browser class accepts executable_path
+            import inspect
+            Browser_signature = inspect.signature(Browser.__init__)
+            if 'executable_path' in Browser_signature.parameters:
+                browser_kwargs['executable_path'] = _chrome_binary
+                logger.info("✅ Setting executable_path for Browser")
+            elif 'channel' in Browser_signature.parameters:
+                # Playwright supports 'chromium' channel
+                logger.info("✅ Browser supports channel parameter")
+        except:
+            # If we can't determine, just log and continue
+            logger.debug("Could not determine Browser constructor parameters")
     
     for attempt in range(max_retries):
         try:
             logger.info(f"🚀 Browser startup attempt {attempt + 1}/{max_retries}")
+            if _chrome_binary:
+                logger.info(f"   Using Chrome: {_chrome_binary}")
             
-            browser = Browser(
-                headless=HEADLESS_MODE,
-                window_size={'width': 1280, 'height': 720},
-                keep_alive=True,
-                args=CHROME_ARGS,
-            )
+            browser = Browser(**browser_kwargs)
             
             # Try to start with longer timeout
+            logger.info(f"   Starting browser (timeout: {timeout}s)...")
             await asyncio.wait_for(browser.start(), timeout=timeout)
             
             # Verify browser is actually working
@@ -138,6 +200,7 @@ async def create_browser_with_retry(max_retries=3, timeout=120):
         except Exception as e:
             last_error = str(e)
             logger.warning(f"⚠️ Attempt {attempt + 1} failed: {last_error}")
+            logger.debug(f"   Error details: {type(e).__name__}: {e}")
         
         if attempt < max_retries - 1:
             wait_time = (attempt + 1) * 2  # Exponential backoff
@@ -154,6 +217,7 @@ async def create_browser_with_retry(max_retries=3, timeout=120):
     raise Exception(f"Failed to start browser after {max_retries} attempts. Last error: {last_error}")
 
 # Add these Chrome args to suppress D-Bus errors and improve startup reliability
+# Based on webbot/videotest.py successful configuration
 CHROME_ARGS = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -172,6 +236,16 @@ CHROME_ARGS = [
     '--disable-web-security',
     '--remote-debugging-port=0',
     '--remote-allow-origins=*',
+    # Additional stability flags from webbot
+    '--disable-background-timer-throttling',
+    '--disable-renderer-backgrounding',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-ipc-flooding-protection',
+    '--disable-crash-reporter',
+    '--disable-in-process-stack-traces',
+    '--disable-logging',
+    '--log-level=3',
+    '--output=/dev/null',
     # NEW: These suppress D-Bus errors in Docker/Vast.ai
     '--disable-dbus',  # Disable D-Bus completely
     '--no-zygote',  # Disable zygote process (helps in containers)
