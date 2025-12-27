@@ -78,151 +78,16 @@ logger.info(f"🔌 Server port: {SERVER_PORT}")
 FASTAPI_URL = os.getenv("FASTAPI_URL", f"http://localhost:{SERVER_PORT}")
 logger.info(f"🔗 FastAPI URL for bot: {FASTAPI_URL}")
 
-# Verify Chrome/Chromium is available and test it can start
-def find_chrome_binary():
-    """Find Chrome/Chromium binary path (similar to webbot approach)."""
-    chrome_paths = [
-        "/snap/chromium/current/usr/lib/chromium-browser/chromium-browser",
-        "/snap/bin/chromium",
-        shutil.which("chromium"),
-        shutil.which("chromium-browser"),
-        shutil.which("google-chrome"),
-        shutil.which("google-chrome-stable"),
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
-    ]
-    # Filter out None values and check if paths exist
-    for path in chrome_paths:
-        if path and os.path.exists(path):
-            logger.info(f"✅ Found Chrome/Chromium at: {path}")
-            return path
-    return None
+# Simplified browser initialization - matching guide.py approach
+# browser-use/Playwright handles Chrome management internally, so we keep it simple
 
-def test_chrome_startup(chrome_binary):
-    """Test if Chrome can start with our required flags (similar to webbot)."""
-    if not chrome_binary:
-        return False
-    
-    try:
-        logger.info(f"🧪 Testing Chrome startup: {chrome_binary}")
-        test_result = subprocess.run(
-            [chrome_binary, "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if test_result.returncode == 0:
-            logger.info(f"✅ Chrome test passed: {test_result.stdout.strip()}")
-            return True
-        else:
-            logger.warning(f"⚠️ Chrome test failed: {test_result.stderr}")
-            return False
-    except Exception as e:
-        logger.warning(f"⚠️ Chrome test error: {e}")
-        return False
-
-# Find and test Chrome on startup
-_chrome_binary = find_chrome_binary()
-_chrome_available = _chrome_binary is not None
-
-if _chrome_available:
-    # Test Chrome can actually start
-    if not test_chrome_startup(_chrome_binary):
-        logger.warning("⚠️ Chrome found but startup test failed. Browser may still work.")
-else:
-    logger.warning("⚠️ Chrome/Chromium not found in PATH. Browser startup may fail.")
-    logger.warning("💡 Run setup_chrome.sh to install Chrome/Chromium")
-
-# UPDATED: Browser initialization with better error handling and longer timeout
-async def create_browser_with_retry(max_retries=3, timeout=120):
-    """Create browser with retry logic and better error handling.
-    
-    Similar approach to webbot/videotest.py but using browser-use (Playwright).
-    """
-    last_error = None
-    
-    # If we found Chrome binary, try to set it explicitly
-    browser_kwargs = {
-        'headless': HEADLESS_MODE,
-        'window_size': {'width': 1280, 'height': 720},
-        'keep_alive': True,
-        'args': CHROME_ARGS,
-    }
-    
-    # Try to set executable path if we found Chrome binary
-    # Note: browser-use uses Playwright, which may support executable_path
-    # Check if browser-use Browser class supports this
-    if _chrome_binary:
-        logger.info(f"🔧 Using Chrome binary: {_chrome_binary}")
-        # Some Playwright wrappers support executable_path or channel
-        # Try both approaches
-        try:
-            # Check if Browser class accepts executable_path
-            import inspect
-            Browser_signature = inspect.signature(Browser.__init__)
-            if 'executable_path' in Browser_signature.parameters:
-                browser_kwargs['executable_path'] = _chrome_binary
-                logger.info("✅ Setting executable_path for Browser")
-            elif 'channel' in Browser_signature.parameters:
-                # Playwright supports 'chromium' channel
-                logger.info("✅ Browser supports channel parameter")
-        except:
-            # If we can't determine, just log and continue
-            logger.debug("Could not determine Browser constructor parameters")
-    
-    for attempt in range(max_retries):
-        try:
-            logger.info(f"🚀 Browser startup attempt {attempt + 1}/{max_retries}")
-            if _chrome_binary:
-                logger.info(f"   Using Chrome: {_chrome_binary}")
-            
-            browser = Browser(**browser_kwargs)
-            
-            # Try to start with longer timeout
-            logger.info(f"   Starting browser (timeout: {timeout}s)...")
-            await asyncio.wait_for(browser.start(), timeout=timeout)
-            
-            # Verify browser is actually working
-            try:
-                page = await browser.get_current_page()
-                if page:
-                    logger.info(f"✅ Browser started successfully on attempt {attempt + 1}")
-                    return browser
-            except Exception as verify_error:
-                logger.warning(f"Browser started but verification failed: {verify_error}")
-                # Continue to retry
-            
-        except asyncio.TimeoutError:
-            last_error = f"Browser startup timed out after {timeout}s"
-            logger.warning(f"⚠️ Attempt {attempt + 1} failed: {last_error}")
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(f"⚠️ Attempt {attempt + 1} failed: {last_error}")
-            logger.debug(f"   Error details: {type(e).__name__}: {e}")
-        
-        if attempt < max_retries - 1:
-            wait_time = (attempt + 1) * 2  # Exponential backoff
-            logger.info(f"⏳ Waiting {wait_time}s before retry...")
-            await asyncio.sleep(wait_time)
-        else:
-            # Cleanup failed browser instance if it exists
-            try:
-                if 'browser' in locals():
-                    await browser.close()
-            except:
-                pass
-    
-    raise Exception(f"Failed to start browser after {max_retries} attempts. Last error: {last_error}")
-
-# Add these Chrome args to suppress D-Bus errors and improve startup reliability
-# Based on webbot/videotest.py successful configuration
+# Chrome args for Docker/Cloud Run environments
+# Simplified to match guide.py - browser-use/Playwright handles Chrome internally
 CHROME_ARGS = [
-    '--no-sandbox',
+    '--no-sandbox',  # Required for Docker
     '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-gpu',
+    '--disable-dev-shm-usage',  # Overcome limited resource problems
+    '--disable-gpu',  # Disable GPU acceleration
     '--disable-software-rasterizer',
     '--disable-extensions',
     '--disable-background-networking',
@@ -232,30 +97,7 @@ CHROME_ARGS = [
     '--no-first-run',
     '--safebrowsing-disable-auto-update',
     '--disable-blink-features=AutomationControlled',
-    '--disable-features=VizDisplayCompositor',
-    '--disable-web-security',
-    '--remote-debugging-port=0',
-    '--remote-allow-origins=*',
-    # Additional stability flags from webbot
-    '--disable-background-timer-throttling',
-    '--disable-renderer-backgrounding',
-    '--disable-backgrounding-occluded-windows',
-    '--disable-ipc-flooding-protection',
-    '--disable-crash-reporter',
-    '--disable-in-process-stack-traces',
-    '--disable-logging',
-    '--log-level=3',
-    '--output=/dev/null',
-    # NEW: These suppress D-Bus errors in Docker/Vast.ai
-    '--disable-dbus',  # Disable D-Bus completely
-    '--no-zygote',  # Disable zygote process (helps in containers)
-    '--single-process',  # Run in single process mode (more stable in containers)
-] if HEADLESS_MODE else [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-dbus',
-]
+] if HEADLESS_MODE else []  # Only apply these flags in headless/Cloud Run mode
 
 
 # ============================================================================
@@ -372,9 +214,15 @@ async def execute_action(request: ActionRequest):
                 # Browser is good, no need to navigate - work on current page
             except Exception as e:
                 logger.warning(f"⚠️ Browser session lost ({e}), will recreate...")
-                # Browser died, create new one with retry logic
+                # Browser died, create new one - simple approach like guide.py
                 try:
-                    browser = await create_browser_with_retry(max_retries=3, timeout=120)
+                    browser = Browser(
+                        headless=HEADLESS_MODE,
+                        window_size={'width': 1280, 'height': 720},
+                        keep_alive=True,
+                        args=CHROME_ARGS,
+                    )
+                    await browser.start()
                     session_data["browser"] = browser
                     is_new_session = True  # Need to navigate since browser was recreated
                 except Exception as recreate_error:
@@ -396,27 +244,19 @@ async def execute_action(request: ActionRequest):
             
             is_new_session = True
             
-            # Check Chrome availability before starting
-            if not _chrome_available:
-                logger.error("❌ Chrome/Chromium not available. Cannot start browser.")
-                raise HTTPException(
-                    status_code=500,
-                    detail="Chrome/Chromium is not installed or not in PATH. Please run setup_chrome.sh to install it."
-                )
+            # Initialize browser - simple approach like guide.py
+            browser = Browser(
+                headless=HEADLESS_MODE,  # Auto-detects from environment
+                window_size={'width': 1280, 'height': 720},
+                keep_alive=True,  # Keep browser alive between requests
+                args=CHROME_ARGS,  # Add Docker/Cloud Run specific flags
+            )
             
-            # Initialize browser with retry logic
+            # Start browser session ONCE - this creates the browser window
             logger.info(f"🚀 Starting browser for session {session_id[:8]}...")
-            logger.info(f"🔍 Headless mode: {HEADLESS_MODE}, Chrome args: {len(CHROME_ARGS)} flags")
-            
-            try:
-                browser = await create_browser_with_retry(max_retries=3, timeout=120)
-                logger.info(f"✅ Browser started for session {session_id[:8]}")
-            except Exception as e:
-                logger.error(f"❌ Browser startup failed for session {session_id[:8]}: {e}", exc_info=True)
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Browser failed to start after multiple attempts: {str(e)}. Check logs for details."
-                )
+            logger.info(f"🔍 Browser instance ID: {id(browser)}")
+            await browser.start()
+            logger.info(f"✅ Browser started for session {session_id[:8]}")
             
             # Store session immediately to prevent duplicate creation
             active_sessions[session_id] = {
