@@ -45,13 +45,8 @@ class DailyBrowserStreamer:
         self.width = width
         self.height = height
         
-        # Ensure Daily is initialized before creating camera device
-        # (In webbot, Daily.init() is called in main() before creating SendBrowserApp)
-        try:
-            Daily.init()
-            logger.info("✅ Daily SDK initialized in streamer")
-        except Exception as e:
-            logger.warning(f"Daily SDK already initialized or warning: {e}")
+        # NOTE: Daily.init() is called in start_daily_bot() before creating this streamer
+        # Do NOT call Daily.init() here - it will cause "Execution context already exists" error
         
         # Give browser time to load and render (like webbot does)
         logger.info("Waiting for browser to be ready...")
