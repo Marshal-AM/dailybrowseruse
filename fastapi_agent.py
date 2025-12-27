@@ -7,6 +7,7 @@ Includes Daily.co streaming capabilities.
 import asyncio
 import logging
 import os
+import shutil
 import sys
 import subprocess
 import time
@@ -77,12 +78,38 @@ logger.info(f"🔌 Server port: {SERVER_PORT}")
 FASTAPI_URL = os.getenv("FASTAPI_URL", f"http://localhost:{SERVER_PORT}")
 logger.info(f"🔗 FastAPI URL for bot: {FASTAPI_URL}")
 
-# Chrome args for Docker/Cloud Run environments
+# Verify Chrome/Chromium is available
+def check_chrome_available():
+    """Check if Chrome/Chromium is installed and accessible."""
+    chrome_paths = [
+        shutil.which("chromium"),
+        shutil.which("chromium-browser"),
+        shutil.which("google-chrome"),
+        shutil.which("google-chrome-stable"),
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/snap/bin/chromium",
+    ]
+    for path in chrome_paths:
+        if path and os.path.exists(path):
+            logger.info(f"✅ Found Chrome/Chromium at: {path}")
+            return True
+    logger.warning("⚠️ Chrome/Chromium not found in PATH. Browser startup may fail.")
+    logger.warning("💡 Run setup_chrome.sh to install Chrome/Chromium")
+    return False
+
+# Check Chrome availability on startup
+_chrome_available = check_chrome_available()
+
+# Chrome args for Docker/Cloud Run/Vast AI environments
+# These are essential for running Chrome in server environments
 CHROME_ARGS = [
-    '--no-sandbox',  # Required for Docker
+    '--no-sandbox',  # Required for Docker/Vast AI
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',  # Overcome limited resource problems
-    '--disable-gpu',  # Disable GPU acceleration
+    '--disable-gpu',  # Disable GPU acceleration (required for headless)
     '--disable-software-rasterizer',
     '--disable-extensions',
     '--disable-background-networking',
@@ -92,7 +119,16 @@ CHROME_ARGS = [
     '--no-first-run',
     '--safebrowsing-disable-auto-update',
     '--disable-blink-features=AutomationControlled',
-] if HEADLESS_MODE else []  # Only apply these flags in headless/Cloud Run mode
+    '--disable-features=VizDisplayCompositor',  # Helps with headless rendering
+    '--disable-web-security',  # Sometimes needed for CDP
+    '--remote-debugging-port=0',  # Let browser_use choose the port
+    '--remote-allow-origins=*',  # Allow CDP connections
+] if HEADLESS_MODE else [
+    # Even in non-headless mode, we need some flags for server environments
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+]
 
 
 # ============================================================================
@@ -210,15 +246,22 @@ async def execute_action(request: ActionRequest):
             except Exception as e:
                 logger.warning(f"⚠️ Browser session lost ({e}), will recreate...")
                 # Browser died, create new one
-                browser = Browser(
-                    headless=HEADLESS_MODE,
-                    window_size={'width': 1280, 'height': 720},
-                    keep_alive=True,
-                    args=CHROME_ARGS,
-                )
-                await browser.start()
-                session_data["browser"] = browser
-                is_new_session = True  # Need to navigate since browser was recreated
+                try:
+                    browser = Browser(
+                        headless=HEADLESS_MODE,
+                        window_size={'width': 1280, 'height': 720},
+                        keep_alive=True,
+                        args=CHROME_ARGS,
+                    )
+                    await asyncio.wait_for(browser.start(), timeout=60.0)
+                    session_data["browser"] = browser
+                    is_new_session = True  # Need to navigate since browser was recreated
+                except Exception as recreate_error:
+                    logger.error(f"❌ Failed to recreate browser: {recreate_error}", exc_info=True)
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Browser session lost and failed to recreate: {str(recreate_error)}"
+                    )
         else:
             # Create new session
             if request.session_id:
@@ -232,7 +275,18 @@ async def execute_action(request: ActionRequest):
             
             is_new_session = True
             
+            # Check Chrome availability before starting
+            if not _chrome_available:
+                logger.error("❌ Chrome/Chromium not available. Cannot start browser.")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Chrome/Chromium is not installed or not in PATH. Please run setup_chrome.sh to install it."
+                )
+            
             # Initialize browser
+            logger.info(f"🚀 Starting browser for session {session_id[:8]}...")
+            logger.info(f"🔍 Headless mode: {HEADLESS_MODE}, Chrome args: {len(CHROME_ARGS)} flags")
+            
             browser = Browser(
                 headless=HEADLESS_MODE,  # Auto-detects from environment
                 window_size={'width': 1280, 'height': 720},
@@ -240,11 +294,25 @@ async def execute_action(request: ActionRequest):
                 args=CHROME_ARGS,  # Add Docker/Cloud Run specific flags
             )
             
-            # Start browser session ONCE - this creates the browser window
-            logger.info(f"🚀 Starting browser for session {session_id[:8]}...")
             logger.info(f"🔍 Browser instance ID: {id(browser)}")
-            await browser.start()
-            logger.info(f"✅ Browser started for session {session_id[:8]}")
+            
+            # Start browser session ONCE - this creates the browser window
+            # Add timeout and better error handling
+            try:
+                await asyncio.wait_for(browser.start(), timeout=60.0)  # 60 second timeout
+                logger.info(f"✅ Browser started for session {session_id[:8]}")
+            except asyncio.TimeoutError:
+                logger.error(f"❌ Browser startup timed out after 60 seconds for session {session_id[:8]}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Browser failed to start within 60 seconds. Check if Chrome/Chromium is installed and accessible."
+                )
+            except Exception as e:
+                logger.error(f"❌ Browser startup failed for session {session_id[:8]}: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Browser failed to start: {str(e)}. Make sure Chrome/Chromium is installed (run setup_chrome.sh)."
+                )
             
             # Store session immediately to prevent duplicate creation
             active_sessions[session_id] = {
