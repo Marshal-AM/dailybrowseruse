@@ -111,9 +111,10 @@ class DailyBrowserStreamer:
     def send_frames(self):
         """
         Continuously capture browser screenshots and send as video frames.
-        EXACTLY matches webbot/videotest.py send_frames() method (line 287-319).
+        EXACTLY matches guide.py send_image() method pattern (line 63-75).
+        Simple, synchronous approach - capture screenshot, convert to bytes, send.
         """
-        # Wait for join to complete (EXACTLY like webbot line 288)
+        # Wait for join to complete (EXACTLY like guide.py line 64)
         self.start_event.wait()
         
         if self.app_error:
@@ -124,91 +125,72 @@ class DailyBrowserStreamer:
         
         logger.info(f"🎥 Starting to stream browser frames at {self.framerate} FPS")
         
-        # Create a single event loop for this thread (reuse it)
-        loop = None
+        # Create a single event loop for this thread (reuse it for async browser operations)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
         frame_count = 0
         
-        while not self.app_quit:
-            try:
-                # Create/reuse event loop for async operations
-                if loop is None or loop.is_closed():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                
-                # Get current page
-                page = loop.run_until_complete(self.browser.get_current_page())
-                if not page:
-                    logger.warning("No active page, skipping frame")
-                    time.sleep(sleep_time)
-                    continue
-                
-                # Capture screenshot - browser-use page.screenshot() returns base64 string
-                # We need to decode it to get bytes (like webbot's get_screenshot_as_png returns bytes)
-                screenshot_data = loop.run_until_complete(page.screenshot())
-                
-                if not screenshot_data:
-                    logger.warning("Empty screenshot data, skipping frame")
-                    time.sleep(sleep_time)
-                    continue
-                
-                # Handle both base64 string and bytes
-                if isinstance(screenshot_data, str):
-                    # It's base64 encoded, decode it
-                    try:
-                        screenshot_bytes = base64.b64decode(screenshot_data)
-                    except Exception as decode_error:
-                        logger.error(f"Failed to decode base64 screenshot: {decode_error}")
+        try:
+            while not self.app_quit:
+                try:
+                    # Get current page (async operation)
+                    page = loop.run_until_complete(self.browser.get_current_page())
+                    if not page:
+                        logger.warning("No active page, skipping frame")
                         time.sleep(sleep_time)
                         continue
-                else:
-                    # It's already bytes
-                    screenshot_bytes = screenshot_data
-                
-                if not screenshot_bytes or len(screenshot_bytes) == 0:
-                    logger.warning("Empty screenshot bytes, skipping frame")
-                    time.sleep(sleep_time)
-                    continue
-                
-                # Convert to PIL Image (EXACTLY like webbot line 302)
-                try:
+                    
+                    # Capture screenshot (async operation)
+                    screenshot_data = loop.run_until_complete(page.screenshot())
+                    
+                    if not screenshot_data:
+                        logger.warning("Empty screenshot data, skipping frame")
+                        time.sleep(sleep_time)
+                        continue
+                    
+                    # Handle both base64 string and bytes
+                    if isinstance(screenshot_data, str):
+                        screenshot_bytes = base64.b64decode(screenshot_data)
+                    else:
+                        screenshot_bytes = screenshot_data
+                    
+                    if not screenshot_bytes or len(screenshot_bytes) == 0:
+                        logger.warning("Empty screenshot bytes, skipping frame")
+                        time.sleep(sleep_time)
+                        continue
+                    
+                    # Convert to PIL Image
                     image = Image.open(io.BytesIO(screenshot_bytes))
-                except Exception as image_error:
-                    logger.error(f"Failed to open image: {image_error}")
-                    time.sleep(sleep_time)
-                    continue
-                
-                # Resize if needed to match camera dimensions (EXACTLY like webbot line 305-306)
-                if image.size != (self.width, self.height):
-                    image = image.resize((self.width, self.height), Image.Resampling.LANCZOS)
-                
-                # Convert to RGB if needed (EXACTLY like webbot line 309-310)
-                if image.mode != "RGB":
-                    image = image.convert("RGB")
-                
-                # Convert to bytes and send (EXACTLY like webbot line 313-314)
-                image_bytes = image.tobytes()
-                
-                # Verify image bytes size matches expected (width * height * 3 for RGB)
-                expected_size = self.width * self.height * 3
-                if len(image_bytes) != expected_size:
-                    logger.warning(f"Image bytes size mismatch: got {len(image_bytes)}, expected {expected_size}")
-                
-                # Write frame to camera
-                try:
+                    
+                    # Resize if needed to match camera dimensions
+                    if image.size != (self.width, self.height):
+                        image = image.resize((self.width, self.height), Image.Resampling.LANCZOS)
+                    
+                    # Convert to RGB if needed
+                    if image.mode != "RGB":
+                        image = image.convert("RGB")
+                    
+                    # Convert to bytes (EXACTLY like guide.py line 71)
+                    image_bytes = image.tobytes()
+                    
+                    # Write frame to camera (EXACTLY like guide.py line 74)
+                    # Simple, synchronous call - no try/except needed, let errors propagate
                     self.camera.write_frame(image_bytes)
                     frame_count += 1
-                    if frame_count % 30 == 0:  # Log every 30 frames (1 second at 30fps)
-                        logger.debug(f"Sent {frame_count} frames")
-                except Exception as write_error:
-                    logger.error(f"Failed to write frame: {write_error}")
+                    
+                    if frame_count % (self.framerate * 2) == 0:  # Log every 2 seconds
+                        logger.info(f"✅ Sent {frame_count} frames")
+                    
+                except Exception as e:
+                    logger.error(f"Error capturing/sending frame: {e}")
+                    # Continue loop even on error
                 
-            except Exception as e:
-                logger.error(f"Error capturing frame: {e}", exc_info=True)
-            
-            time.sleep(sleep_time)
+                # Sleep between frames (EXACTLY like guide.py line 75)
+                time.sleep(sleep_time)
         
-        # Clean up event loop
-        if loop and not loop.is_closed():
+        finally:
+            # Clean up event loop
             loop.close()
         
         logger.info(f"🛑 Stopped streaming browser frames (sent {frame_count} total frames)")
@@ -231,7 +213,7 @@ def start_daily_bot(
     session_id: str,
     browser,
     meeting_url: str,
-    framerate: int = 30,
+    framerate: int = 10,  # Lower FPS for stability (guide.py uses low FPS)
     width: int = 1280,
     height: int = 720
 ) -> str:
