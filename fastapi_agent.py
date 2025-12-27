@@ -686,7 +686,6 @@ CRITICAL RULES FOR ELEMENT SELECTION:
         if session_id in active_sessions and "bot_id" in active_sessions[session_id]:
             try:
                 from daily_browser_bot import start_streaming_for_bot
-                import asyncio
                 bot_id = active_sessions[session_id]["bot_id"]
                 # Pass the main event loop so screenshots run in the correct loop
                 main_loop = asyncio.get_event_loop()
