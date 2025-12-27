@@ -686,11 +686,14 @@ CRITICAL RULES FOR ELEMENT SELECTION:
         if session_id in active_sessions and "bot_id" in active_sessions[session_id]:
             try:
                 from daily_browser_bot import start_streaming_for_bot
+                import asyncio
                 bot_id = active_sessions[session_id]["bot_id"]
-                start_streaming_for_bot(bot_id)
+                # Pass the main event loop so screenshots run in the correct loop
+                main_loop = asyncio.get_event_loop()
+                start_streaming_for_bot(bot_id, main_loop)
                 logger.info(f"🎬 Started streaming after action completion for session {session_id[:8]}")
             except Exception as stream_error:
-                logger.error(f"Failed to start streaming: {stream_error}")
+                logger.error(f"Failed to start streaming: {stream_error}", exc_info=True)
         
         # Include Daily room URL in response if available
         daily_room_url = None
