@@ -14,6 +14,8 @@ import time
 import uuid
 from typing import Optional
 
+import aiohttp
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,8 +86,59 @@ logger.info(f"🔌 Server port: {SERVER_PORT}")
 FASTAPI_URL = os.getenv("FASTAPI_URL", f"http://localhost:{SERVER_PORT}")
 logger.info(f"🔗 FastAPI URL for bot: {FASTAPI_URL}")
 
+# Server bot URL - where the Gemini bot server is running
+# Set SERVER_BOT_URL environment variable to enable automatic bot joining
+SERVER_BOT_URL = os.getenv("SERVER_BOT_URL", None)
+if SERVER_BOT_URL:
+    logger.info(f"🤖 Server bot URL configured: {SERVER_BOT_URL}")
+else:
+    logger.info("🤖 Server bot URL not configured (set SERVER_BOT_URL to enable)")
+
 # Simplified browser initialization - matching guide.py approach
 # browser-use/Playwright handles Chrome management internally, so we keep it simple
+
+
+async def notify_server_bot(room_url: str, session_id: str, room_token: Optional[str] = None):
+    """
+    Notify the server bot to join a Daily.co room.
+    
+    Args:
+        room_url: The Daily.co room URL
+        session_id: The browser session ID
+        room_token: Optional room token (if needed)
+    """
+    if not SERVER_BOT_URL:
+        logger.debug("Server bot URL not configured, skipping notification")
+        return
+    
+    join_url = f"{SERVER_BOT_URL.rstrip('/')}/join-room"
+    
+    payload = {
+        "room_url": room_url,
+        "session_id": session_id,
+    }
+    
+    if room_token:
+        payload["room_token"] = room_token
+    
+    try:
+        logger.info(f"📤 Notifying server bot to join room: {room_url[:50]}...")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                join_url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    logger.info(f"✅ Server bot notified successfully: {result.get('message', 'OK')}")
+                else:
+                    error_text = await response.text()
+                    logger.warning(f"⚠️ Server bot notification returned {response.status}: {error_text}")
+    except asyncio.TimeoutError:
+        logger.warning(f"⚠️ Server bot notification timed out")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to notify server bot: {e}")
 
 # Chrome args for Docker/Cloud Run/Vast AI environments
 # Always include essential args for server environments, even in non-headless mode
@@ -810,6 +863,14 @@ async def create_daily_room(request: CreateRoomRequest):
             active_sessions[request.session_id]["bot_id"] = bot_id
             
             logger.info(f"✅ Bot started: {bot_id}")
+            
+            # Notify server bot to join the room (if configured)
+            if SERVER_BOT_URL:
+                try:
+                    await notify_server_bot(room_url, request.session_id, room_token=None)
+                except Exception as notify_error:
+                    logger.warning(f"⚠️ Failed to notify server bot: {notify_error}")
+                    # Don't fail the request if notification fails
         except Exception as bot_error:
             # If bot fails to start, clean up the room we just created
             logger.error(f"❌ Failed to start bot: {bot_error}", exc_info=True)
