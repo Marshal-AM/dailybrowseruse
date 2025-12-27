@@ -682,6 +682,16 @@ CRITICAL RULES FOR ELEMENT SELECTION:
         if session_id in active_sessions:
             active_sessions[session_id]["total_steps"] = active_sessions[session_id].get("total_steps", 0) + steps_taken
         
+        # Start streaming AFTER action completes (200 OK) - page is now ready!
+        if session_id in active_sessions and "bot_id" in active_sessions[session_id]:
+            try:
+                from daily_browser_bot import start_streaming_for_bot
+                bot_id = active_sessions[session_id]["bot_id"]
+                start_streaming_for_bot(bot_id)
+                logger.info(f"🎬 Started streaming after action completion for session {session_id[:8]}")
+            except Exception as stream_error:
+                logger.error(f"Failed to start streaming: {stream_error}")
+        
         # Include Daily room URL in response if available
         daily_room_url = None
         daily_room_name = None
