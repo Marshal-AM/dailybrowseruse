@@ -134,32 +134,17 @@ class DailyBrowserStreamer:
         try:
             while not self.app_quit:
                 try:
-                    # Get current page (async operation with timeout)
-                    logger.debug(f"Getting current page for frame {frame_count + 1}...")
-                    try:
-                        page = loop.run_until_complete(
-                            asyncio.wait_for(self.browser.get_current_page(), timeout=2.0)
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning("Timeout getting current page, skipping frame")
-                        time.sleep(sleep_time)
-                        continue
-                    
+                    # Get current page (EXACTLY like fastapi_agent.py line 1031 - no timeout!)
+                    # Page is already loaded by the time we get here (200 OK means page loaded)
+                    page = loop.run_until_complete(self.browser.get_current_page())
                     if not page:
                         logger.warning("No active page, skipping frame")
                         time.sleep(sleep_time)
                         continue
                     
-                    logger.debug(f"Capturing screenshot for frame {frame_count + 1}...")
-                    # Capture screenshot (async operation with timeout)
-                    try:
-                        screenshot_data = loop.run_until_complete(
-                            asyncio.wait_for(page.screenshot(), timeout=2.0)
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning("Timeout capturing screenshot, skipping frame")
-                        time.sleep(sleep_time)
-                        continue
+                    # Capture screenshot (EXACTLY like fastapi_agent.py line 1044 - no parameters, no timeout!)
+                    # Just like webbot's get_screenshot_as_png() - simple, direct call
+                    screenshot_data = loop.run_until_complete(page.screenshot())
                     
                     if not screenshot_data:
                         logger.warning("Empty screenshot data, skipping frame")
