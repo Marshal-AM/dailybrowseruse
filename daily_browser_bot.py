@@ -313,6 +313,16 @@ def start_daily_bot(
     return bot_id
 
 
+def start_streaming_for_bot(bot_id: str):
+    """Start streaming for a bot (call this after page is loaded, after 200 OK)."""
+    if bot_id in _active_streamers:
+        streamer = _active_streamers[bot_id]
+        streamer.start_streaming()
+        logger.info(f"🎬 Started streaming for bot {bot_id}")
+    else:
+        logger.warning(f"Bot {bot_id} not found for streaming start")
+
+
 def stop_daily_bot(bot_id: str):
     """Stop a running Daily bot."""
     if bot_id in _active_streamers:
