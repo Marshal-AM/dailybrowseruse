@@ -1,7 +1,7 @@
 """
 FastAPI entry point for browser-use agent.
 Accepts URL and action, maintains browser session state between requests.
-Includes LiveKit streaming capabilities.
+Includes Daily.co streaming capabilities.
 """
 
 import asyncio
@@ -24,8 +24,7 @@ from browser_use.agent.views import AgentHistoryList
 # Load environment variables from .env file
 load_dotenv()
 
-# Add daily_streaming to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "daily_streaming"))
+# Note: Removed daily_streaming path - no longer needed for Daily.co implementation
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -536,7 +535,7 @@ async def list_sessions():
 
 
 # ============================================================================
-# LiveKit Streaming Endpoints
+# Daily.co Streaming Endpoints
 # ============================================================================
 
 # Global room info storage (for /room-info endpoint)
@@ -647,7 +646,7 @@ async def create_daily_room(request: CreateRoomRequest):
 @app.get("/streaming/room-info")
 async def get_room_info():
     """
-    Get current LiveKit room information.
+    Get current Daily.co room information.
     Used by client to discover available rooms.
     Returns null if no room is available yet (instead of 404 to avoid log spam).
     """
@@ -893,7 +892,7 @@ async def get_screenshot(session_id: str, force_refresh: bool = False):
 @app.delete("/streaming/end-stream/{session_id}")
 async def end_stream(session_id: str):
     """
-    End a streaming session and cleanup LiveKit room and bot.
+    End a streaming session and cleanup Daily.co room and bot.
     """
     if session_id not in active_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -995,23 +994,26 @@ if __name__ == "__main__":
     import uvicorn
     from pyngrok import ngrok
     
+    # Server port - use 8080 to match ngrok and FASTAPI_URL
+    SERVER_PORT = 8080
+    
     # Set ngrok authtoken
     ngrok.set_auth_token("2kEGVmoK5L1A7fSTRJ6k4n7YMkl_3jBZXFdHfibFjz6fh9LAN")
     
     # Create tunnel
-    public_url = ngrok.connect(8080)
+    public_url = ngrok.connect(SERVER_PORT)
     
     print("="*60)
     print("Browser-Use FastAPI Agent")
     print("="*60)
-    print("\nStarting server on http://localhost:8080")
-    print("API docs available at http://localhost:8080/docs")
+    print(f"\nStarting server on http://localhost:{SERVER_PORT}")
+    print(f"API docs available at http://localhost:{SERVER_PORT}/docs")
     print(f"\n🌐 Public URL (ngrok): {public_url}")
     print(f"🌐 Public API docs: {public_url}/docs")
-    print("\nMake sure OPENAI_API_KEY is set in your environment!")
+    print("\nMake sure OPENAI_API_KEY and DAILY_API_KEY are set in your environment!")
     print("="*60)
     
     try:
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT)
     except KeyboardInterrupt:
         ngrok.kill()
