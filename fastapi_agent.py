@@ -98,7 +98,7 @@ else:
 # browser-use/Playwright handles Chrome management internally, so we keep it simple
 
 
-async def notify_server_bot(room_url: str, session_id: str, room_token: Optional[str] = None):
+async def notify_server_bot(room_url: str, session_id: str, room_token: Optional[str] = None, agent_id: Optional[str] = None):
     """
     Notify the server bot to join a Daily.co room.
     
@@ -106,6 +106,7 @@ async def notify_server_bot(room_url: str, session_id: str, room_token: Optional
         room_url: The Daily.co room URL
         session_id: The browser session ID
         room_token: Optional room token (if needed)
+        agent_id: Optional agent ID for demo configuration
     """
     if not SERVER_BOT_URL:
         logger.warning("⚠️ SERVER_BOT_URL not configured, skipping server bot notification")
@@ -121,8 +122,12 @@ async def notify_server_bot(room_url: str, session_id: str, room_token: Optional
     if room_token:
         payload["room_token"] = room_token
     
+    if agent_id:
+        payload["agent_id"] = agent_id
+        logger.info(f"📤 Including agent_id in notification: {agent_id}")
+    
     logger.info(f"📤 Sending POST request to server bot: {join_url}")
-    logger.info(f"📤 Payload: room_url={room_url[:50]}..., session_id={session_id[:8]}")
+    logger.info(f"📤 Payload: room_url={room_url[:50]}..., session_id={session_id[:8]}, agent_id={agent_id}")
     
     try:
         async with aiohttp.ClientSession() as session:
@@ -222,6 +227,7 @@ class ActionRequest(BaseModel):
     action: str
     session_id: Optional[str] = None  # Optional: if provided, continues existing session
     max_steps: int = 20  # Maximum steps for this action
+    agent_id: Optional[str] = None  # Optional: agent ID for demo configuration
 
 
 class ActionResponse(BaseModel):
@@ -488,7 +494,7 @@ async def execute_action(request: ActionRequest):
                         if SERVER_BOT_URL:
                             logger.info(f"📤 Attempting to notify server bot at {SERVER_BOT_URL}...")
                             try:
-                                await notify_server_bot(room_url, session_id, room_token=None)
+                                await notify_server_bot(room_url, session_id, room_token=None, agent_id=request.agent_id)
                             except Exception as notify_error:
                                 logger.warning(f"⚠️ Failed to notify server bot: {notify_error}", exc_info=True)
                                 # Don't fail the request if notification fails
@@ -888,7 +894,7 @@ async def create_daily_room(request: CreateRoomRequest):
             # Notify server bot to join the room (if configured)
             if SERVER_BOT_URL:
                 try:
-                    await notify_server_bot(room_url, request.session_id, room_token=None)
+                    await notify_server_bot(room_url, request.session_id, room_token=None, agent_id=None)
                 except Exception as notify_error:
                     logger.warning(f"⚠️ Failed to notify server bot: {notify_error}")
                     # Don't fail the request if notification fails
