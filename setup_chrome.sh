@@ -3,8 +3,9 @@
 
 echo "Installing Chromium browser and dependencies..."
 
-# Update package list
+# Update package list and install prerequisites
 apt-get update
+apt-get install -y wget gnupg curl
 
 # Install Chromium, chromedriver, and ALL required dependencies
 # These are needed for both Chromium and chromedriver to work
@@ -49,14 +50,19 @@ if command -v chromium-browser &> /dev/null; then
 else
     echo "Chromium installation failed. Trying alternative method..."
     
-    # Alternative: Install Google Chrome
-    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add -
-    echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
-    apt-get update
-    apt-get install -y google-chrome-stable
+    # Alternative: Install Google Chrome directly from .deb package
+    echo "Downloading Google Chrome..."
+    wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
     
-    if command -v google-chrome-stable &> /dev/null; then
-        echo "Google Chrome installed successfully at: $(which google-chrome-stable)"
+    echo "Installing Google Chrome..."
+    apt-get install -y ./google-chrome-stable_current_amd64.deb
+    
+    # Clean up downloaded .deb file
+    rm -f google-chrome-stable_current_amd64.deb
+    
+    if command -v google-chrome-stable &> /dev/null || command -v google-chrome &> /dev/null; then
+        CHROME_CMD=$(command -v google-chrome-stable || command -v google-chrome)
+        echo "Google Chrome installed successfully at: $CHROME_CMD"
     else
         echo "Chrome installation failed. Please install manually."
         exit 1
