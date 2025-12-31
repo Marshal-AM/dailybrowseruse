@@ -11,12 +11,179 @@ import io
 import logging
 import threading
 import time
+import os
 from typing import Optional
+from urllib.parse import urlparse
+
+import aiohttp
 
 from daily import CallClient, Daily
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+# Daily API configuration
+DAILY_API_KEY = os.getenv("DAILY_API_KEY", "")
+DAILY_API_BASE_URL = "https://api.daily.co/v1"
+
+
+def extract_room_name_from_url(room_url: str) -> Optional[str]:
+    """
+    Extract room name from Daily.co room URL.
+    
+    Examples:
+    - https://jobi.daily.co/browser-session-42ecb5cf -> browser-session-42ecb5cf
+    """
+    try:
+        parsed = urlparse(room_url)
+        path = parsed.path.strip('/')
+        if path:
+            return path
+        if '/' in room_url:
+            return room_url.split('/')[-1]
+        return room_url
+    except Exception as e:
+        logger.error(f"Error extracting room name from URL: {e}")
+        return None
+
+
+async def get_meeting_id_for_room(room_name: str) -> Optional[str]:
+    """
+    Get meeting ID for a given room name.
+    
+    Args:
+        room_name: Name of the Daily room
+        
+    Returns:
+        Meeting ID or None if not found
+    """
+    if not DAILY_API_KEY:
+        return None
+    
+    headers = {
+        "Authorization": f"Bearer {DAILY_API_KEY}",
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{DAILY_API_BASE_URL}/meetings",
+                headers=headers
+            ) as response:
+                if response.status != 200:
+                    return None
+                
+                data = await response.json()
+                meetings = data.get("data", [])
+                
+                for meeting in meetings:
+                    if meeting.get("room") == room_name:
+                        return meeting.get("id")
+                
+                return None
+    except Exception as e:
+        logger.debug(f"Error getting meeting ID: {e}")
+        return None
+
+
+async def get_room_participants(meeting_id: str) -> list:
+    """
+    Get list of participants currently in a Daily.co meeting.
+    
+    Args:
+        meeting_id: ID of the Daily meeting
+        
+    Returns:
+        list: List of participant dictionaries
+    """
+    if not DAILY_API_KEY:
+        return []
+    
+    headers = {
+        "Authorization": f"Bearer {DAILY_API_KEY}",
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{DAILY_API_BASE_URL}/meetings/{meeting_id}/participants",
+                headers=headers
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    participants = data.get("data", data.get("participants", []))
+                    return participants
+                elif response.status == 404:
+                    return []
+                else:
+                    return []
+    except Exception as e:
+        logger.debug(f"Error getting room participants: {e}")
+        return []
+
+
+def is_bot_participant(participant: dict) -> bool:
+    """
+    Check if a participant is a bot (streaming bot or other automated participant).
+    
+    Args:
+        participant: Participant dictionary from Daily API
+        
+    Returns:
+        bool: True if participant appears to be a bot
+    """
+    user_name = participant.get("user_name")
+    user_id = participant.get("user_id")
+    participant_id = participant.get("participant_id", "")
+    
+    # Convert to lowercase strings for checking
+    user_name_lower = (user_name or "").lower()
+    user_id_lower = (user_id or "").lower()
+    participant_id_lower = (participant_id or "").lower()
+    
+    # Check if it's a bot based on name or user_id
+    bot_indicators = ["bot", "guest", "stream", "automated"]
+    
+    for indicator in bot_indicators:
+        if indicator in user_name_lower or indicator in user_id_lower or indicator in participant_id_lower:
+            return True
+    
+    # CRITICAL: If user_name is None/empty AND user_id exists, it's likely a bot
+    # The streaming bot typically has user_name=None but has a user_id
+    if not user_name and user_id:
+        return True
+    
+    # Also check if participant_id matches user_id (common for bots)
+    if user_id and participant_id and user_id == participant_id:
+        return True
+    
+    return False
+
+
+async def has_non_bot_participants(meeting_url: str) -> bool:
+    """
+    Check if there are any non-bot participants in the room.
+    
+    Args:
+        meeting_url: Daily.co meeting URL
+        
+    Returns:
+        bool: True if there are non-bot participants, False otherwise
+    """
+    room_name = extract_room_name_from_url(meeting_url)
+    if not room_name:
+        return False
+    
+    meeting_id = await get_meeting_id_for_room(room_name)
+    if not meeting_id:
+        return False
+    
+    participants = await get_room_participants(meeting_id)
+    
+    # Check if there's at least one non-bot participant
+    user_participants = [p for p in participants if not is_bot_participant(p)]
+    
+    return len(user_participants) > 0
 
 
 class DailyBrowserStreamer:
@@ -77,6 +244,9 @@ class DailyBrowserStreamer:
         self.start_event = threading.Event()
         self.stream_thread = None  # Will be started after page is ready (after 200 OK)
         self._stream_started = False
+        self.monitor_thread = None  # Thread to monitor participants
+        self._monitoring = False  # Flag to control monitoring
+        self._leaving = False  # Flag to prevent double-leaving
         
     def on_joined(self, data, error):
         """Callback when bot joins the room. EXACTLY like webbot line 260-264."""
@@ -122,6 +292,15 @@ class DailyBrowserStreamer:
             self.stream_thread.start()
             self._stream_started = True
             logger.info("✅ Streaming thread started")
+            
+            # Start participant monitoring
+            if DAILY_API_KEY:
+                self._monitoring = True
+                self.monitor_thread = threading.Thread(target=self.monitor_participants, daemon=True)
+                self.monitor_thread.start()
+                logger.info("✅ Participant monitoring started")
+            else:
+                logger.warning("⚠️ DAILY_API_KEY not set - participant monitoring disabled")
     
     def send_frames(self):
         """
@@ -270,11 +449,70 @@ class DailyBrowserStreamer:
         
         logger.info(f"🛑 Stopped streaming browser frames (sent {frame_count} total frames)")
     
+    def monitor_participants(self):
+        """
+        Monitor participants in the room. Stop streaming if no non-bot participants remain.
+        This runs in a separate thread and checks periodically.
+        """
+        check_interval = 5.0  # Check every 5 seconds
+        logger.info(f"👀 Starting participant monitoring (checking every {check_interval} seconds)")
+        
+        while not self.app_quit and self._monitoring:
+            try:
+                # Check if there are any non-bot participants
+                # Use a new event loop for this async call
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    has_participants = loop.run_until_complete(
+                        has_non_bot_participants(self.meeting_url)
+                    )
+                finally:
+                    loop.close()
+                
+                if not has_participants:
+                    logger.info("👋 No non-bot participants found in room. Stopping streaming...")
+                    self.app_quit = True
+                    # Give a moment for the stream thread to finish
+                    time.sleep(1.0)
+                    # Leave the room (only if not already leaving)
+                    if not self._leaving:
+                        self._leaving = True
+                        try:
+                            self.client.leave()
+                            self.client.release()
+                            logger.info("✅ Left Daily room (no participants)")
+                        except Exception as e:
+                            logger.error(f"Error leaving room: {e}")
+                    break
+                
+            except Exception as e:
+                logger.debug(f"Error checking participants: {e}")
+                # Continue monitoring even on error
+            
+            # Wait before next check
+            time.sleep(check_interval)
+        
+        logger.info("🛑 Participant monitoring stopped")
+    
     def leave(self):
         """Leave the room and cleanup. EXACTLY like webbot line 279-285."""
+        if self._leaving:
+            logger.debug("Already leaving, skipping...")
+            return
+        
+        self._leaving = True
         self.app_quit = True
+        self._monitoring = False  # Stop monitoring
+        
+        # Wait for monitoring thread to finish
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=2.0)
+        
+        # Wait for stream thread to finish
         if self.stream_thread:
             self.stream_thread.join()
+        
         self.client.leave()
         self.client.release()
         logger.info("✅ Bot left Daily room")
