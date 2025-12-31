@@ -180,14 +180,24 @@ async def has_non_bot_participants(meeting_url: str, exclude_participant_id: Opt
         return False
     
     participants = await get_room_participants(meeting_id)
+    logger.info(f"📊 Streaming bot checking participants: found {len(participants)} total participants")
     
     # Filter out the excluded participant if provided
     if exclude_participant_id:
         participants = [p for p in participants if p.get('participant_id') != exclude_participant_id and p.get('id') != exclude_participant_id]
-        logger.debug(f"📊 After excluding participant {exclude_participant_id[:8]}..., {len(participants)} participants remain")
+        logger.info(f"📊 After excluding participant {exclude_participant_id[:8]}..., {len(participants)} participants remain")
+    
+    # Log all participants for debugging
+    for p in participants:
+        user_name = p.get('user_name', 'None')
+        user_id = p.get('user_id', 'None')
+        participant_id = p.get('participant_id', p.get('id', 'None'))
+        is_bot = is_bot_participant(p)
+        logger.info(f"   👤 Participant: name={user_name}, user_id={user_id}, participant_id={participant_id}, is_bot={is_bot}")
     
     # Check if there's at least one non-bot participant
     user_participants = [p for p in participants if not is_bot_participant(p)]
+    logger.info(f"📊 Found {len(user_participants)} non-bot participants")
     
     return len(user_participants) > 0
 
@@ -302,11 +312,11 @@ class DailyBrowserStreamer:
             # Start participant monitoring
             if DAILY_API_KEY:
                 self._monitoring = True
-                self.monitor_thread = threading.Thread(target=self.monitor_participants, daemon=True)
+                self.monitor_thread = threading.Thread(target=self.monitor_participants, daemon=False, name=f"StreamMonitor-{self.session_id[:8]}")
                 self.monitor_thread.start()
-                logger.info("✅ Participant monitoring started")
+                logger.info(f"✅ Participant monitoring started for streaming bot (thread: {self.monitor_thread.name})")
             else:
-                logger.warning("⚠️ DAILY_API_KEY not set - participant monitoring disabled")
+                logger.warning("⚠️ DAILY_API_KEY not set - participant monitoring disabled for streaming bot")
     
     def send_frames(self):
         """
@@ -461,11 +471,15 @@ class DailyBrowserStreamer:
         This runs in a separate thread and checks periodically.
         Stops when the Gemini bot leaves or when no users remain.
         """
-        check_interval = 3.0  # Check every 3 seconds (more frequent)
-        logger.info(f"👀 Starting participant monitoring (checking every {check_interval} seconds)")
+        check_interval = 2.0  # Check every 2 seconds (more frequent)
+        logger.info(f"👀 Starting participant monitoring for streaming bot (checking every {check_interval} seconds)")
         
+        check_count = 0
         while not self.app_quit and self._monitoring:
             try:
+                check_count += 1
+                logger.info(f"🔍 Streaming bot monitoring check #{check_count}...")
+                
                 # Check if there are any non-bot participants
                 # Use a new event loop for this async call
                 loop = asyncio.new_event_loop()
@@ -474,6 +488,7 @@ class DailyBrowserStreamer:
                     has_participants = loop.run_until_complete(
                         has_non_bot_participants(self.meeting_url)
                     )
+                    logger.info(f"🔍 Streaming bot check result: has_participants={has_participants}")
                 finally:
                     loop.close()
                 
@@ -487,6 +502,7 @@ class DailyBrowserStreamer:
                     if not self._leaving:
                         self._leaving = True
                         try:
+                            logger.info("🚪 Leaving Daily room...")
                             self.client.leave()
                             self.client.release()
                             logger.info("✅ Left Daily room (no participants)")
@@ -497,17 +513,19 @@ class DailyBrowserStreamer:
                                 del _active_streamers[bot_id]
                                 logger.info(f"🧹 Removed bot {bot_id} from registry")
                         except Exception as e:
-                            logger.error(f"Error leaving room: {e}")
+                            logger.error(f"Error leaving room: {e}", exc_info=True)
                     break
+                else:
+                    logger.info(f"👋 Streaming bot will continue - non-bot participants still present")
                 
             except Exception as e:
-                logger.debug(f"Error checking participants: {e}")
+                logger.error(f"Error checking participants in streaming bot: {e}", exc_info=True)
                 # Continue monitoring even on error
             
             # Wait before next check
             time.sleep(check_interval)
         
-        logger.info("🛑 Participant monitoring stopped")
+        logger.info("🛑 Participant monitoring stopped for streaming bot")
     
     def leave(self):
         """Leave the room and cleanup. EXACTLY like webbot line 279-285."""
