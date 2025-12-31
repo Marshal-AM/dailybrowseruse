@@ -1177,6 +1177,58 @@ async def get_screenshot(session_id: str, force_refresh: bool = False):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/streaming/stop-bot/{session_id}")
+async def stop_streaming_bot(session_id: str):
+    """
+    Stop the streaming bot for a session. Called by Gemini bot when it leaves the room.
+    This immediately stops streaming without deleting the room or session.
+    """
+    logger.info(f"🛑 Received stop streaming bot request for session {session_id[:8]}...")
+    
+    # Check if session exists
+    if session_id not in active_sessions:
+        logger.warning(f"⚠️ Session {session_id[:8]} not found in active_sessions")
+        # Still try to stop bot by bot_id pattern
+        try:
+            from daily_browser_bot import stop_daily_bot
+            bot_id = f"daily-bot-{session_id}"
+            stop_daily_bot(bot_id)
+            logger.info(f"✅ Stopped Daily bot by bot_id: {bot_id}")
+            return {"message": "Streaming bot stopped", "session_id": session_id}
+        except Exception as e:
+            logger.warning(f"Failed to stop bot by bot_id: {e}")
+            return {"message": "Session not found, but attempted to stop bot", "session_id": session_id}
+    
+    try:
+        session_data = active_sessions[session_id]
+        
+        # Stop bot if it exists
+        if "bot_id" in session_data:
+            try:
+                from daily_browser_bot import stop_daily_bot
+                bot_id = session_data["bot_id"]
+                stop_daily_bot(bot_id)
+                logger.info(f"✅ Stopped Daily bot: {bot_id} for session {session_id[:8]}")
+            except Exception as e:
+                logger.error(f"❌ Failed to stop bot: {e}", exc_info=True)
+        else:
+            # Try to stop by bot_id pattern even if not in session_data
+            try:
+                from daily_browser_bot import stop_daily_bot
+                bot_id = f"daily-bot-{session_id}"
+                stop_daily_bot(bot_id)
+                logger.info(f"✅ Stopped Daily bot by bot_id pattern: {bot_id}")
+            except Exception as e:
+                logger.warning(f"Failed to stop bot by bot_id pattern: {e}")
+        
+        logger.info(f"✅ Streaming bot stopped for session {session_id[:8]}")
+        return {"message": "Streaming bot stopped successfully", "session_id": session_id}
+        
+    except Exception as e:
+        logger.error(f"Error stopping streaming bot: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.delete("/streaming/end-stream/{session_id}")
 async def end_stream(session_id: str):
     """
