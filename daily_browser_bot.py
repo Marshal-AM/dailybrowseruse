@@ -160,12 +160,13 @@ def is_bot_participant(participant: dict) -> bool:
     return False
 
 
-async def has_non_bot_participants(meeting_url: str) -> bool:
+async def has_non_bot_participants(meeting_url: str, exclude_participant_id: Optional[str] = None) -> bool:
     """
     Check if there are any non-bot participants in the room.
     
     Args:
         meeting_url: Daily.co meeting URL
+        exclude_participant_id: Optional participant ID to exclude from the check (e.g., someone who just left)
         
     Returns:
         bool: True if there are non-bot participants, False otherwise
@@ -179,6 +180,11 @@ async def has_non_bot_participants(meeting_url: str) -> bool:
         return False
     
     participants = await get_room_participants(meeting_id)
+    
+    # Filter out the excluded participant if provided
+    if exclude_participant_id:
+        participants = [p for p in participants if p.get('participant_id') != exclude_participant_id and p.get('id') != exclude_participant_id]
+        logger.debug(f"📊 After excluding participant {exclude_participant_id[:8]}..., {len(participants)} participants remain")
     
     # Check if there's at least one non-bot participant
     user_participants = [p for p in participants if not is_bot_participant(p)]
@@ -453,8 +459,9 @@ class DailyBrowserStreamer:
         """
         Monitor participants in the room. Stop streaming if no non-bot participants remain.
         This runs in a separate thread and checks periodically.
+        Stops when the Gemini bot leaves or when no users remain.
         """
-        check_interval = 5.0  # Check every 5 seconds
+        check_interval = 3.0  # Check every 3 seconds (more frequent)
         logger.info(f"👀 Starting participant monitoring (checking every {check_interval} seconds)")
         
         while not self.app_quit and self._monitoring:
@@ -471,8 +478,9 @@ class DailyBrowserStreamer:
                     loop.close()
                 
                 if not has_participants:
-                    logger.info("👋 No non-bot participants found in room. Stopping streaming...")
+                    logger.info("👋 No non-bot participants found in room (Gemini bot left or no users). Stopping streaming...")
                     self.app_quit = True
+                    self._monitoring = False
                     # Give a moment for the stream thread to finish
                     time.sleep(1.0)
                     # Leave the room (only if not already leaving)
@@ -482,6 +490,12 @@ class DailyBrowserStreamer:
                             self.client.leave()
                             self.client.release()
                             logger.info("✅ Left Daily room (no participants)")
+                            
+                            # Remove from registry
+                            bot_id = f"daily-bot-{self.session_id}"
+                            if bot_id in _active_streamers:
+                                del _active_streamers[bot_id]
+                                logger.info(f"🧹 Removed bot {bot_id} from registry")
                         except Exception as e:
                             logger.error(f"Error leaving room: {e}")
                     break
