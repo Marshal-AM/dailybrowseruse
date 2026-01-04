@@ -509,7 +509,7 @@ async def execute_action(request: ActionRequest):
         if is_new_session:
             logger.info(f"🧭 Navigating to {request.url} for new session {session_id[:8]}...")
             # Initialize LLM (OpenAI only)
-            llm = ChatOpenAI(model='gpt-4o')
+            llm = ChatOpenAI(model='gpt-4o-mini')
             
             # Navigate to the URL first - use the EXISTING browser instance
             # Use flash_mode and simple task - just navigate, no summaries
@@ -632,7 +632,7 @@ CRITICAL: After navigating, you MUST call done in the same step or the very next
             
             # Create a new agent instance for this action (reuses the SAME browser)
             # CRITICAL: Pass the same browser instance - Agent will reuse it, not create a new one
-            llm = ChatOpenAI(model='gpt-4o')
+            llm = ChatOpenAI(model='gpt-4o-mini')
             
             # Verify we're using the stored browser instance
             stored_browser = active_sessions[session_id]["browser"]
