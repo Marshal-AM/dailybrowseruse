@@ -514,19 +514,36 @@ async def execute_action(request: ActionRequest):
             
             # Navigate to the URL first - use the EXISTING browser instance
             # Use flash_mode and simple task - just navigate, no summaries
-            initial_task = f"Navigate to {request.url}. After navigating, IMMEDIATELY call done. Do NOT verify, do NOT check if it worked. Just navigate and call done."
+            initial_task = f"Your task is to navigate to {request.url}. Use the 'navigate' action to go to this URL. Once you have executed the navigate action, IMMEDIATELY call done. Do NOT wait, do NOT verify, do NOT check if it worked. Just navigate and call done right away."
             
             # Override system message completely to force immediate done after navigation
-            navigation_system_message = """You are a navigation-only agent. Your job is simple:
-1. Navigate to the requested URL
-2. IMMEDIATELY call done after navigating
-3. Do NOT verify if navigation worked
-4. Do NOT extract content or provide summaries
-5. Do NOT evaluate page contents
-6. Do NOT use browser back button or navigate back to previous pages
-7. Do NOT go back - STAY on the page you navigated to
+            navigation_system_message = """You are a navigation-only agent. Your job is extremely simple and focused:
 
-CRITICAL: After navigating, you MUST call done in the same step or the very next step. Navigation is complete once you've navigated - no verification needed. Once you're on the new page, STAY there and call done immediately. Do NOT navigate back."""
+**YOUR ONLY TASK:**
+1. Use the 'navigate' action to go to the requested URL
+2. IMMEDIATELY call done after executing the navigate action
+3. That's it - nothing else
+
+**WHAT TO DO:**
+- Execute the navigate action with the URL provided
+- As soon as the navigate action is executed, call done immediately
+- Do NOT wait for the page to load
+- Do NOT check if navigation worked
+- Do NOT verify anything
+- Do NOT extract content
+- Do NOT provide summaries
+- Do NOT evaluate page contents
+- Do NOT use browser back button
+- Do NOT navigate back to previous pages
+- Do NOT do anything else
+
+**CRITICAL RULES:**
+- Navigation is complete the moment you execute the navigate action - no waiting needed
+- Call done IMMEDIATELY after the navigate action, in the same step
+- Once you're on the new page, STAY there - do NOT go back
+- Do NOT verify or check anything - just navigate and call done
+
+**REMEMBER**: Navigate → Done. That's all. No verification, no waiting, no checking."""
             
             nav_agent = Agent(
                 task=initial_task,
@@ -622,14 +639,14 @@ CRITICAL: After navigating, you MUST call done in the same step or the very next
             
             if is_new_session:
                 if must_stop_immediately:
-                    action_task = f"You are already on {current_url}. {request.action}.{spatial_instruction} CRITICAL: After performing the requested action, IMMEDIATELY call done. Do NOT perform any other actions. Do NOT click anything else. Do NOT explore. Do NOT navigate back. STAY on the page after clicking. Just perform the action and call done."
+                    action_task = f"You are currently on {current_url}. Your task: {request.action}.{spatial_instruction} CRITICAL INSTRUCTIONS: Perform the requested action immediately. As soon as you complete the action, IMMEDIATELY call done. Do NOT perform any other actions. Do NOT click anything else. Do NOT explore. Do NOT navigate back. STAY on the page after clicking. Execute the action and call done right away - no delays."
                 else:
-                    action_task = f"You are already on {current_url}. {request.action}.{spatial_instruction} IMPORTANT: If this involves a dropdown, follow these steps: 1) Click to open the dropdown, 2) Use the 'wait' action to wait 3 seconds, 3) Then click the item inside the dropdown. After clicking a link/button that should navigate, wait for the URL to change and page to load before calling done. CRITICAL: Once the URL changes, STAY on that new page. Do NOT navigate back. Do NOT use back button. Do NOT call done until navigation completes. Do NOT verify content."
+                    action_task = f"You are currently on {current_url}. Your task: {request.action}.{spatial_instruction} IMPORTANT INSTRUCTIONS: If this involves a dropdown menu, follow these EXACT steps: 1) Click to open the dropdown, 2) Use the 'wait' action to wait 3 seconds, 3) Then click the item inside the dropdown. If clicking a link/button that should navigate to a new page: wait for the URL to change and the page to load, then call done. CRITICAL: Once the URL changes to a new page, that means navigation succeeded - STAY on that new page. Do NOT navigate back. Do NOT use back button. Do NOT call done until you see the URL change (if navigation is expected). Do NOT verify content - just perform the action and call done when appropriate."
             else:
                 if must_stop_immediately:
-                    action_task = f"{request.action}.{spatial_instruction} CRITICAL: After performing the requested action, IMMEDIATELY call done. Do NOT perform any other actions. Do NOT click anything else. Do NOT explore. Do NOT navigate back. STAY on the page after clicking. Just perform the action and call done."
+                    action_task = f"Your task: {request.action}.{spatial_instruction} CRITICAL INSTRUCTIONS: Perform the requested action immediately. As soon as you complete the action, IMMEDIATELY call done. Do NOT perform any other actions. Do NOT click anything else. Do NOT explore. Do NOT navigate back. STAY on the page after clicking. Execute the action and call done right away - no delays."
                 else:
-                    action_task = f"{request.action}.{spatial_instruction} IMPORTANT: If this involves a dropdown, follow these steps: 1) Click to open the dropdown, 2) Use the 'wait' action to wait 3 seconds, 3) Then click the item inside the dropdown. After clicking a link/button that should navigate, wait for the URL to change and page to load before calling done. CRITICAL: Once the URL changes, STAY on that new page. Do NOT navigate back. Do NOT use back button. Do NOT call done until navigation completes. Do NOT verify content."
+                    action_task = f"Your task: {request.action}.{spatial_instruction} IMPORTANT INSTRUCTIONS: If this involves a dropdown menu, follow these EXACT steps: 1) Click to open the dropdown, 2) Use the 'wait' action to wait 3 seconds, 3) Then click the item inside the dropdown. If clicking a link/button that should navigate to a new page: wait for the URL to change and the page to load, then call done. CRITICAL: Once the URL changes to a new page, that means navigation succeeded - STAY on that new page. Do NOT navigate back. Do NOT use back button. Do NOT call done until you see the URL change (if navigation is expected). Do NOT verify content - just perform the action and call done when appropriate."
             
             # Create a new agent instance for this action (reuses the SAME browser)
             # CRITICAL: Pass the same browser instance - Agent will reuse it, not create a new one
@@ -647,18 +664,25 @@ CRITICAL: After navigating, you MUST call done in the same step or the very next
             
             # Override system message - handle dropdowns and explicit stop instructions
             if must_stop_immediately:
-                navigation_system_message = """You are a navigation-only agent with STRICT stop instructions. Your job is:
-1. Perform ONLY the requested action (click, navigate, scroll, etc.)
-2. IMMEDIATELY call done after performing the action
-3. Do NOT perform any other actions
-4. Do NOT click anything else
-5. Do NOT explore the page
-6. Do NOT verify content
-7. Do NOT extract information
-8. Do NOT use browser back button or navigate back to previous pages
-9. Do NOT go back to the previous page - STAY on the new page after navigation
+                navigation_system_message = """You are a navigation-only agent with STRICT stop instructions. Your job is extremely focused:
 
-CRITICAL NAVIGATION RULES:
+**YOUR TASK:**
+1. Perform ONLY the requested action (click, navigate, scroll, etc.) - nothing else
+2. IMMEDIATELY call done after performing the action - no delays
+3. That's it - stop immediately
+
+**WHAT NOT TO DO:**
+- Do NOT perform any other actions
+- Do NOT click anything else
+- Do NOT explore the page
+- Do NOT verify content
+- Do NOT extract information
+- Do NOT use browser back button
+- Do NOT navigate back to previous pages
+- Do NOT go back to the previous page - STAY on the new page after navigation
+- Do NOT perform additional clicks, scrolling, or exploration
+
+**CRITICAL NAVIGATION RULES:**
 - After clicking a button/link that navigates to a new page, you MUST STAY on that new page
 - Once the URL changes to a new page, that is your signal that navigation succeeded
 - Do NOT navigate back, do NOT use back button, do NOT return to previous pages
@@ -666,7 +690,7 @@ CRITICAL NAVIGATION RULES:
 - If NO navigation occurs, IMMEDIATELY call done and STOP
 - NEVER go back to a previous page - always stay on the current page after clicking
 
-CRITICAL RULES FOR ELEMENT SELECTION:
+**CRITICAL RULES FOR ELEMENT SELECTION:**
 - Pay careful attention to SPATIAL CONTEXT when selecting elements:
   * If the user mentions "below", "under", "beneath", or "after" a specific element, find elements that are VISUALLY POSITIONED BELOW that element on the page
   * If the user mentions "above", "over", or "before" a specific element, find elements that are VISUALLY POSITIONED ABOVE that element
@@ -675,23 +699,41 @@ CRITICAL RULES FOR ELEMENT SELECTION:
   * When multiple elements have the same text (e.g., "iPhone" in header and in product grid), use the visual position and context clues to select the correct one
 - Use the visual screenshot and element positions to determine which element matches the spatial description
 - If the task says "do NOTHING else" or "only" or "just", you MUST stop immediately after the action
-- Do NOT perform any additional clicks, scrolling, or exploration"""
+
+**REMEMBER**: Action → Done. Immediately. No delays, no extra steps."""
             else:
-                navigation_system_message = """You are a navigation-only agent. Your job is simple:
+                navigation_system_message = """You are a navigation-only agent. Your job is clear and focused:
+
+**YOUR TASK:**
 1. Perform the requested navigation action (click, navigate, scroll, etc.)
-2. For dropdown menus: Follow these EXACT steps:
+2. Call done when the action is complete
+
+**DROPDOWN MENUS - EXACT STEPS:**
+If the action involves a dropdown menu, follow these EXACT steps in order:
    a) Click to open the dropdown
    b) Use the 'wait' action to wait 3 seconds (this ensures the dropdown is fully visible)
    c) Then click the item inside the dropdown
-3. If the action triggers navigation (clicking a link/button that navigates), wait for the page to load (URL changes) before calling done
-4. If the action does NOT trigger navigation (like scrolling), call done immediately after the action
-5. Do NOT verify content or extract information
-6. Do NOT repeat the action unnecessarily
-7. Do NOT provide summaries
-8. Do NOT use browser back button or navigate back to previous pages
-9. Do NOT go back to the previous page - STAY on the new page after navigation
 
-CRITICAL NAVIGATION RULES:
+**NAVIGATION HANDLING:**
+- If the action triggers navigation (clicking a link/button that navigates to a new page):
+  * Wait for the URL to change - this is your signal that navigation succeeded
+  * Wait for the page to load
+  * Once the URL has changed and page is loaded, IMMEDIATELY call done
+  * STAY on the new page - do NOT navigate back
+  
+- If the action does NOT trigger navigation (like scrolling, clicking buttons that don't navigate):
+  * Call done immediately after the action
+  * No need to wait for URL changes
+
+**WHAT NOT TO DO:**
+- Do NOT verify content or extract information
+- Do NOT repeat the action unnecessarily
+- Do NOT provide summaries
+- Do NOT use browser back button
+- Do NOT navigate back to previous pages
+- Do NOT go back to the previous page - STAY on the new page after navigation
+
+**CRITICAL NAVIGATION RULES:**
 - After clicking a button/link that navigates to a new page, you MUST STAY on that new page
 - Once the URL changes to a new page, that is your signal that navigation succeeded
 - Do NOT navigate back, do NOT use back button, do NOT return to previous pages
@@ -699,7 +741,7 @@ CRITICAL NAVIGATION RULES:
 - NEVER go back to a previous page - always stay on the current page after clicking
 - If you see the URL change, that means navigation worked - stay there and call done
 
-CRITICAL RULES FOR ELEMENT SELECTION:
+**CRITICAL RULES FOR ELEMENT SELECTION:**
 - Pay careful attention to SPATIAL CONTEXT when selecting elements:
   * If the user mentions "below", "under", "beneath", or "after" a specific element, find elements that are VISUALLY POSITIONED BELOW that element on the page
   * If the user mentions "above", "over", or "before" a specific element, find elements that are VISUALLY POSITIONED ABOVE that element
@@ -709,7 +751,9 @@ CRITICAL RULES FOR ELEMENT SELECTION:
 - Use the visual screenshot and element positions to determine which element matches the spatial description
 - ALWAYS use 'wait' action for 3 seconds between opening a dropdown and clicking an item inside it
 - When clicking links or navigation buttons, wait for the page to load (you'll see the URL change) before calling done
-- If navigation doesn't happen after clicking, try clicking again or check if the element is actually clickable"""
+- If navigation doesn't happen after clicking, try clicking again or check if the element is actually clickable
+
+**REMEMBER**: Perform action → Wait for URL change (if navigation) → Call done → Stay on new page."""
             
             action_agent = Agent(
                 task=action_task,
