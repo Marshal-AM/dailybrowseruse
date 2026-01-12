@@ -470,15 +470,31 @@ class DailyBrowserStreamer:
         Monitor participants in the room. Stop streaming if no non-bot participants remain.
         This runs in a separate thread and checks periodically.
         Stops when the Gemini bot leaves or when no users remain.
+        
+        Kaushikh: Added two-phase monitoring:
+        Phase 1: Wait for at least one user to join (grace period)
+        Phase 2: Only then monitor for user departures
         """
         check_interval = 2.0  # Check every 2 seconds (more frequent)
+        # Kaushikh: Grace period to wait for user to join before starting "leave if empty" logic
+        initial_grace_period = 120.0  # Kaushikh: Wait up to 120 seconds for first user
         logger.info(f"👀 Starting participant monitoring for streaming bot (checking every {check_interval} seconds)")
+        logger.info(f"Will wait up to {initial_grace_period} seconds for first user before monitoring departures")
         
         check_count = 0
+        user_ever_joined = False  # Kaushikh: Track if we've ever seen a user
+        grace_period_start = time.time()  # Kaushikh: Track when grace period started
+        
         while not self.app_quit and self._monitoring:
             try:
                 check_count += 1
-                logger.info(f"🔍 Streaming bot monitoring check #{check_count}...")
+                elapsed_time = time.time() - grace_period_start  # Kaushikh: Time since monitoring started
+                
+                # Kaushikh: Reduce log spam - only log every 5th check or on state changes
+                should_log = (check_count % 5 == 1) or (check_count <= 3)
+                
+                if should_log:
+                    logger.info(f"🔍 Streaming bot monitoring check #{check_count} (elapsed: {elapsed_time:.1f}s)...")
                 
                 # Check if there are any non-bot participants
                 # Use a new event loop for this async call
@@ -488,12 +504,48 @@ class DailyBrowserStreamer:
                     has_participants = loop.run_until_complete(
                         has_non_bot_participants(self.meeting_url)
                     )
-                    logger.info(f"🔍 Streaming bot check result: has_participants={has_participants}")
+                    if should_log:
+                        logger.info(f"🔍 Streaming bot check result: has_participants={has_participants}")
                 finally:
                     loop.close()
                 
-                if not has_participants:
-                    logger.info("👋 No non-bot participants found in room (Gemini bot left or no users). Stopping streaming...")
+                # Kaushikh: Phase 1 - Wait for first user to join
+                if not user_ever_joined:
+                    if has_participants:
+                        # Kaushikh: First user detected! Now we can start monitoring for departures
+                        user_ever_joined = True
+                        logger.info(f"✅ First user detected after {elapsed_time:.1f}s! Now monitoring for departures.")
+                    elif elapsed_time >= initial_grace_period:
+                        # Kaushikh: Grace period expired and no user ever joined - leave
+                        logger.warning(f"⏰ Grace period expired ({initial_grace_period}s) - no user ever joined. Stopping streaming...")
+                        self.app_quit = True
+                        self._monitoring = False
+                        time.sleep(1.0)
+                        if not self._leaving:
+                            self._leaving = True
+                            try:
+                                logger.info("🚪 Leaving Daily room (grace period expired, no users)...")
+                                self.client.leave()
+                                self.client.release()
+                                logger.info("✅ Left Daily room (no users joined within grace period)")
+                                
+                                bot_id = f"daily-bot-{self.session_id}"
+                                if bot_id in _active_streamers:
+                                    del _active_streamers[bot_id]
+                                    logger.info(f"🧹 Removed bot {bot_id} from registry")
+                            except Exception as e:
+                                logger.error(f"Error leaving room: {e}", exc_info=True)
+                        break
+                    else:
+                        # Kaushikh: Still in grace period, waiting for user
+                        remaining = initial_grace_period - elapsed_time
+                        if should_log:
+                            logger.info(f"⏳: Waiting for user... ({remaining:.0f}s remaining in grace period)")
+                
+                # Kaushikh: Phase 2 - Monitor for user departures (only after user has joined once)
+                elif user_ever_joined and not has_participants:
+                    # Kaushikh: User was here but now gone - leave
+                    logger.info("👋 No non-bot participants found (user left). Stopping streaming...")
                     self.app_quit = True
                     self._monitoring = False
                     # Give a moment for the stream thread to finish
@@ -516,7 +568,9 @@ class DailyBrowserStreamer:
                             logger.error(f"Error leaving room: {e}", exc_info=True)
                     break
                 else:
-                    logger.info(f"👋 Streaming bot will continue - non-bot participants still present")
+                    # Kaushikh: User is still present, continue streaming
+                    if should_log:
+                        logger.info(f"👋 Streaming bot will continue - non-bot participants still present")
                 
             except Exception as e:
                 logger.error(f"Error checking participants in streaming bot: {e}", exc_info=True)
@@ -641,4 +695,3 @@ def stop_daily_bot(bot_id: str):
 def get_active_daily_bots() -> list[str]:
     """Get list of active bot IDs."""
     return list(_active_streamers.keys())
-
